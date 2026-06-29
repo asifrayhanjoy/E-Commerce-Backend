@@ -8,6 +8,9 @@
     },
     {
       "path": "./apps/E-Commerce-BG"
+    },
+    {
+      "path": "./api-gateway"
     }
   ]
 }

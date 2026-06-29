@@ -6,22 +6,52 @@
       "request": "launch",
       "name": "Debug @e-commerce-bg/E-Commerce-BG with Nx",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "nx",
-        "serve",
-        "@e-commerce-bg/E-Commerce-BG"
-      ],
+      "runtimeArgs": ["nx", "serve", "@e-commerce-bg/E-Commerce-BG"],
       "env": {
         "NODE_OPTIONS": "--inspect=9229"
       },
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
+      "skipFiles": ["<node_internals>/**"],
       "sourceMaps": true,
       "outFiles": [
         "${workspaceFolder}/apps/E-Commerce-BG/dist/**/*.(m|c|)js",
+        "!**/node_modules/**"
+      ]
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug @e-commerce-bg/api-gateway with Nx",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["nx", "serve", "@e-commerce-bg/api-gateway"],
+      "env": {
+        "NODE_OPTIONS": "--inspect=9230"
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"],
+      "sourceMaps": true,
+      "outFiles": [
+        "${workspaceFolder}/api-gateway/dist/**/*.(m|c|)js",
+        "!**/node_modules/**"
+      ]
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug @e-commerce-bg/api-gateway with Nx",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["nx", "serve", "@e-commerce-bg/api-gateway"],
+      "env": {
+        "NODE_OPTIONS": "--inspect=9231"
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"],
+      "sourceMaps": true,
+      "outFiles": [
+        "${workspaceFolder}/api-gateway/dist/**/*.(m|c|)js",
         "!**/node_modules/**"
       ]
     }

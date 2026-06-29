@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify Your Account</title>
+
+  <style>
+    body{
+      margin:0;
+      padding:0;
+      background:#f4f7fb;
+      font-family:Arial,Helvetica,sans-serif;
+    }
+
+    .container{
+      width:100%;
+      padding:40px 0;
+    }
+
+    .card{
+      width:600px;
+      max-width:95%;
+      margin:auto;
+      background:#ffffff;
+      border-radius:12px;
+      overflow:hidden;
+      box-shadow:0 5px 20px rgba(0,0,0,.08);
+    }
+
+    .header{
+      background:#2563eb;
+      color:#fff;
+      text-align:center;
+      padding:30px;
+    }
+
+    .header h1{
+      margin:0;
+    }
+
+    .body{
+      padding:35px;
+      color:#333;
+      line-height:1.8;
+    }
+
+    .otp{
+      background:#f3f4f6;
+      padding:18px;
+      text-align:center;
+      font-size:32px;
+      letter-spacing:10px;
+      font-weight:bold;
+      border-radius:10px;
+      margin:25px 0;
+    }
+
+    .info{
+      background:#f9fafb;
+      padding:15px;
+      border-radius:8px;
+      margin-top:20px;
+    }
+
+    .info p{
+      margin:6px 0;
+    }
+
+    .footer{
+      padding:25px;
+      text-align:center;
+      font-size:13px;
+      color:#888;
+      background:#fafafa;
+    }
+
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="card">
+
+<div class="header">
+<h1><%= companyName %></h1>
+<p>Email Verification</p>
+</div>
+
+<div class="body">
+
+<h2>Hello <%= name %> 👋</h2>
+
+<p>
+Thank you for creating your account.
+To complete your registration, please verify your email address using the OTP below.
+</p>
+
+<div class="otp">
+<%= otp %>
+</div>
+
+<p>
+This OTP will expire in <strong>5 minutes</strong>.
+</p>
+
+<div class="info">
+
+<p><strong>Name:</strong> <%= name %></p>
+
+<p><strong>Email:</strong> <%= email %></p>
+
+</div>
+
+<p>
+If you didn't request this verification code, please ignore this email.
+</p>
+
+<p>
+Thanks,<br>
+<strong><%= companyName %> Team</strong>
+</p>
+
+</div>
+
+<div class="footer">
+
+© <%= new Date().getFullYear() %> <%= companyName %>. All Rights Reserved.
+
+</div>
+
+</div>
+
+</div>
+
+</body>
+</html>

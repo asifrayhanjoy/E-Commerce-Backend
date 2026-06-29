@@ -4,6 +4,7 @@
 dist
 tmp
 out-tsc
+.env
 
 # dependencies
 node_modules
@@ -23,12 +24,6 @@ node_modules
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
-
-# environment files
-.env
-.env.*
-!.env.example
-
 # misc
 /.sass-cache
 /connect.lock
@@ -49,6 +44,8 @@ Thumbs.db
 .claude/worktrees
 .claude/settings.local.json
 
-test-output
+# Next.js
+.next
+out
 
-/generated/prisma
+test-output

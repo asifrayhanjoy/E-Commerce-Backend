@@ -43,7 +43,7 @@ export const trackOtpRequests = async (email: string) => {
   const otpRequestKey = `otp_request_count:${email}`;
   const otpRequests = parseInt((await redis.get(otpRequestKey)) || "0");
 
-  if (otpRequests >= 2) {
+  if (otpRequests >= 3) {
     await redis.set(`otp_spam_lock:${email}`, "locked", { ex: 3600 });
     throw new ValidationError(
       "Too many OTP requests. Please wait 1 hour before requesting again."
@@ -119,13 +119,16 @@ export const handleForgotPassword = async ( req: Request, res: Response, next: N
     if (!email) {
       throw new ValidationError("Email is required!");
     }
-
-    const user = userType === "user"? await prisma.users.findUnique({
-            where: { email },
-          })
-        : await prisma.seller.findUnique({
-            where: { email },
-          });
+    let user;
+    if (userType === "user") {
+      user = await prisma.users.findUnique({
+        where: { email },
+      });
+    } else {
+      user = await prisma.sellers.findUnique({
+        where: { email },
+      });
+    }
 
     if (!user) {
       throw new ValidationError(`${userType} not found!`);
@@ -158,3 +161,4 @@ export const verifyForgotPasswordOtp = async ( req: Request, res: Response, next
     return next(error);
   }
 };
+

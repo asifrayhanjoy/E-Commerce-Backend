@@ -10,7 +10,7 @@ const router = Router();
 router.post("/register", userRegistration);
 router.post("/verify-otp", verifyUser);
 router.post("/login", loginUser);
-router.post("/refresh-token-user", refreshToken);
+router.post("/refresh-token", refreshToken);
 router.post("/forgot-password-user", userForgotPassword);
 router.post("/reset-password-user", resetUserPassword);
 router.post("/verify-forgot-password-user", verifyForgotPasswordOtp);

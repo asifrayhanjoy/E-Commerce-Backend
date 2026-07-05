@@ -79,6 +79,10 @@ export const loginUser = async ( req: Request, res: Response, next: NextFunction
       return next(new AuthError("Invalid email or password"));
     }
 
+    res.clearCookie("access_Tocken")
+    res.clearCookie("Refresh_Tocken")
+
+
     // Generate access token
     const accessToken = jwt.sign(
       {
@@ -122,9 +126,13 @@ export const loginUser = async ( req: Request, res: Response, next: NextFunction
 };
 
 // refresh token user
-export const refreshToken = async ( req: Request, res: Response, next: NextFunction ) => {
+export const refreshToken = async ( req: any, res: Response, next: NextFunction ) => {
   try {
-    const refreshToken = req.cookies.refresh_token;
+   const refreshToken =
+      req.cookies?.["refresh-token"] ||
+      req.cookies?.["seller-refresh-token"] ||
+      req.headers.authorization?.split(" ")[1];
+
 
     if (!refreshToken) {
       throw new ValidationError("Unauthorized! No refresh token.");
@@ -139,14 +147,20 @@ export const refreshToken = async ( req: Request, res: Response, next: NextFunct
       throw new ValidationError("Forbidden! Invalid refresh token.");
     }
 
-    // let account;
-    // if (decoded.role === "user")
+    let account;
+    if (decoded.role === "user")
 
-    const user = await prisma.users.findUnique({
+    account = await prisma.users.findUnique({
       where: { id: decoded.id },
     });
+    else if (decoded.role ==="seller"){
+      account = await prisma.sellers.findUnique({
+      where: { id: decoded.id },
+      include: {shop: true}
+    });
+    }
 
-    if (!user) {
+    if (!account) {
       return new AuthError("Forbidden! User/Seller not found");
     }
 
@@ -156,8 +170,13 @@ export const refreshToken = async ( req: Request, res: Response, next: NextFunct
       { expiresIn: "15m" }
     );
 
-    setCookie(res, "access_token", newAccessToken);
+    if (decoded.role === "user") {
+      setCookie(res, "access_token", newAccessToken);
+    }else if (decoded.role === "seller") {
+      setCookie(res, "seller-access-token", newAccessToken);
+    }
 
+    req.role = decoded.role
     return res.status(201).json({
       success: true,
     });
@@ -423,35 +442,33 @@ export const sellerLogin = async ( req: Request, res: Response, next: NextFuncti
       );
     }
 
-    const user = await prisma.users.findUnique({
+    const seller = await prisma.sellers.findUnique({
       where: { email },
+      include: { shop: true },
     });
 
-    console.log("Email:", email);
-    console.log("Input Password:", password);
-    console.log("User:", user);
-    console.log("DB Password:", user?.password);
-
-    if (!user) {
+    if (!seller) {
       return next(
-        new AuthError("User doesn't exists!")
+        new AuthError("Seller doesn't exists!")
       );
     }
 
     // verify password
-    const isMatch = await bcrypt.compare(password, user.password!);
-
-    console.log("isMatch:", isMatch);
+    const isMatch = await bcrypt.compare(password, seller.password!);
 
     if (!isMatch) {
       return next(new AuthError("Invalid email or password"));
     }
 
+
+    res.clearCookie("Seller_access_Tocken")
+    res.clearCookie("Seller_Refresh_Tocken")
+    
     // Generate access token
     const accessToken = jwt.sign(
       {
-        id: user.id,
-        role: "user",
+        id: seller.id,
+        role: "seller",
       },
       process.env.ACCESS_TOKEN_SECRET as string,
       {
@@ -462,8 +479,8 @@ export const sellerLogin = async ( req: Request, res: Response, next: NextFuncti
 // Generate refersh token
       const refershToken = jwt.sign(
       {
-        id: user.id,
-        role: "user",
+        id: seller.id,
+        role: "seller",
       },
       process.env.REFRESH_TOKEN_SECRET as string,
       {
@@ -472,16 +489,17 @@ export const sellerLogin = async ( req: Request, res: Response, next: NextFuncti
     );
 
 // Store the refresh and access token in an httpOnly secure cookie
-      setCookie(res, "refresh_token", refershToken);
-      setCookie(res, "access_token", accessToken);
+      setCookie(res, "seller-refresh-token", refershToken);
+      setCookie(res, "seller-access-token", accessToken);
 
 // store refresh token and access token
       res.status(200).json({
       message: "Login successful!",
-      user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
+      seller: {
+      id: seller.id,
+      email: seller.email,
+      name: seller.name,
+      shop: seller.shop,
       },
       });
 

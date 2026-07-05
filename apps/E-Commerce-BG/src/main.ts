@@ -6,7 +6,7 @@ import express from "express";
 import cors from "cors";
 
 import morgan from "morgan";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import { errorMiddleware } from "./packages/error-handler/custom-error";
 import authRouter from "./routes/auth.route";
@@ -40,7 +40,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: true,
   keyGenerator: (req: any) => {
-    return req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    return ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress);
   },
   validate: { xForwardedForHeader: false },
   skip: () => process.env.NODE_ENV !== 'production',

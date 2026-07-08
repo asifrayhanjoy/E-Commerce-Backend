@@ -1,0 +1,12 @@
+{
+  "name": "@e-commerce-bg/product-service",
+  "version": "0.0.1",
+  "private": true,
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.1.0",
+    "morgan": "^1.11.0"
+  }
+}

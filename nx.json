@@ -44,7 +44,7 @@
       "options": {
         "targetName": "test"
       },
-      "exclude": ["apps/E-Commerce-BG-e2e/**/*"]
+      "exclude": ["apps/E-Commerce-BG-e2e/**/*", "product-service-e2e/**/*"]
     }
   ],
   "targetDefaults": {

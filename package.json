@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "dev": "nx serve @e-commerce-bg/E-Commerce-BG"
+    "dev": "nx serve @e-commerce-bg/E-Commerce-BG",
+    "product-service": "nx serve @e-commerce-bg/product-service"
   },
   "private": true,
   "dependencies": {
@@ -66,6 +67,8 @@
   },
   "workspaces": [
     "apps/*",
-    "api-gateway"
+    "apps/E-Commerce-BG/product-service",
+    "api-gateway",
+    "product-service-e2e"
   ]
 }

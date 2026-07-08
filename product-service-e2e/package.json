@@ -1,0 +1,26 @@
+{
+  "name": "@e-commerce-bg/product-service-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "implicitDependencies": [
+      "@e-commerce-bg/product-service"
+    ],
+    "targets": {
+      "e2e": {
+        "executor": "@nx/jest:jest",
+        "outputs": [
+          "{projectRoot}/test-output/jest/coverage"
+        ],
+        "options": {
+          "jestConfig": "product-service-e2e/jest.config.cts",
+          "passWithNoTests": true
+        },
+        "dependsOn": [
+          "@e-commerce-bg/product-service:build",
+          "@e-commerce-bg/product-service:serve"
+        ]
+      }
+    }
+  }
+}

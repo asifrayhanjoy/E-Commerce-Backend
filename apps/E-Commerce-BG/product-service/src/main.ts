@@ -1,0 +1,46 @@
+import cors from "cors";
+import dotenv from "dotenv";
+import express from 'express';
+import * as path from 'path';
+import morgan from "morgan";
+import {
+  errorMiddleware,
+  notFoundMiddleware,
+} from "./middleware/error.middleware";
+import productRouter from "./routes/product.route";
+
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({
+  path: path.resolve(process.cwd(), "apps/E-Commerce-BG/product-service/.env"),
+  override: true,
+});
+
+const app = express();
+
+app.set("trust proxy", 1);
+app.use(
+  cors({
+    origin: ["http://localhost:6001", "http://localhost:3000"],
+    allowedHeaders: ["Authorization", "Content-Type"],
+    credentials: true,
+  })
+);
+app.use(morgan("dev"));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
+
+app.get('/api', (req, res) => {
+  res.send({ message: 'Welcome to product-service!' });
+});
+
+app.use("/api/v1/products", productRouter);
+app.use(notFoundMiddleware);
+app.use(errorMiddleware);
+
+const port = Number(process.env.PORT) || 8181;
+
+const server = app.listen(port, () => {
+  console.log(`Listening at http://localhost${port}/api`);
+});
+server.on('error', console.error);

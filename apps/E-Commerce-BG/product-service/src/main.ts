@@ -1,4 +1,5 @@
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import express from 'express';
 import * as path from 'path';
@@ -9,9 +10,10 @@ import {
 } from "./middleware/error.middleware";
 import productRouter from "./routes/product.route";
 
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(__dirname, "../../../..", ".env") });
+dotenv.config({ path: path.resolve(__dirname, "../..", ".env") });
 dotenv.config({
-  path: path.resolve(process.cwd(), "apps/E-Commerce-BG/product-service/.env"),
+  path: path.resolve(__dirname, "..", ".env"),
   override: true,
 });
 
@@ -28,6 +30,7 @@ app.use(
 app.use(morgan("dev"));
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use(cookieParser());
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
 app.get('/api', (req, res) => {

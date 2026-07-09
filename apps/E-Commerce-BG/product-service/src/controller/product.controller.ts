@@ -1,5 +1,12 @@
 import { NextFunction, Request, Response } from "express";
+import ImageKit from "imagekit";
 import prisma from "../libs/prisma";
+
+const imagekit = new ImageKit({
+  publicKey: process.env.IMAGEKIT_PUBLIC_KEY || "",
+  privateKey: process.env.IMAGEKIT_PRIVATE_KEY || "",
+  urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || "",
+});
 
 // Minimal ValidationError for controller use
 class ValidationError extends Error {
@@ -45,12 +52,13 @@ export const getCategories = async ( _req: Request, res: Response, next: NextFun
   }
 };
 
-// Create discount codes
-export const createDiscountCodes = async ( req: Request & { seller?: { id: string } }, res: Response, next: NextFunction ) => {
+// Creates a new discount code for the authenticated seller.
+export const createDiscountCodes = async ( req: Request & { user?: { id: string } }, res: Response, next: NextFunction ) => {
   try {
     const { public_name, discountType, discountValue, discountCode, } = req.body;
+    const sellerId = req.user?.id;
 
-    if (!req.seller || !req.seller.id) {
+    if (!sellerId) {
       return res.status(401).json({ message: "Unauthorized: seller not found on request" });
     }
 
@@ -74,7 +82,7 @@ export const createDiscountCodes = async ( req: Request & { seller?: { id: strin
         discountType,
         discountValue: parseFloat(discountValue),
         discountCode,
-        sellerId: req.seller.id,
+        sellerId,
       },
     });
 
@@ -90,9 +98,15 @@ export const createDiscountCodes = async ( req: Request & { seller?: { id: strin
 /// get discount codes
 export const getDiscountCodes = async ( req: any, res: Response, next: NextFunction ) => {
   try {
+    const sellerId = req.user?.id;
+
+    if (!sellerId) {
+      return res.status(401).json({ message: "Unauthorized: seller not found on request" });
+    }
+
     const discount_codes = await prisma.discount_codes.findMany({
       where: {
-        sellerId: req.seller.id,
+        sellerId,
       },
     });
 
@@ -105,11 +119,15 @@ export const getDiscountCodes = async ( req: any, res: Response, next: NextFunct
   }
 };
 
-// delete discount code
+// Deletes a discount code after confirming it belongs to the authenticated seller.
 export const deleteDiscountCode = async ( req: any, res: Response, next: NextFunction ) => {
   try {
     const { id } = req.params;
-    const sellerId = req.seller?.id;
+    const sellerId = req.user?.id;
+
+    if (!sellerId) {
+      return res.status(401).json({ message: "Unauthorized: seller not found on request" });
+    }
 
     const discountCode = await prisma.discount_codes.findUnique({
       where: { id },
@@ -135,3 +153,25 @@ export const deleteDiscountCode = async ( req: any, res: Response, next: NextFun
     next(error);
   }
 };
+
+// upload product image
+export const uploadProductImage = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const { fileName } = req.body;
+
+    const response = await imagekit.upload({
+      file: fileName,
+      fileName: `product-${Date.now()}.jpg`,
+      folder: "/products",
+    });
+
+    res.status(201).json({
+      file_url: response.url,
+      fileName: response.fileId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+

@@ -2,6 +2,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import express from 'express';
+import "./job/product-crone-job";
 import * as path from 'path';
 import morgan from "morgan";
 import {

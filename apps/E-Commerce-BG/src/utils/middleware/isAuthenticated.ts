@@ -46,6 +46,7 @@ const isAuthenticated = async ( req: any, res: Response, next: NextFunction ) =>
       include: {shop:true}
     });
      req.user = account;
+     req.seller = account;
     }
 
     if (!account) {

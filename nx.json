@@ -1,8 +1,22 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "analytics": true,
+  "analytics": false,
+  "useDaemonProcess": false,
+  "parallel": 1,
+  "cacheDirectory": ".nx/cache",
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/.next/**/*",
+      "!{projectRoot}/.nx/**/*",
+      "!{projectRoot}/.turbo/**/*",
+      "!{projectRoot}/coverage/**/*",
+      "!{projectRoot}/dist/**/*",
+      "!{projectRoot}/node_modules/**/*",
+      "!{projectRoot}/out-tsc/**/*",
+      "!{projectRoot}/test-output/**/*",
+      "sharedGlobals"
+    ],
     "production": [
       "default",
       "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
@@ -48,6 +62,18 @@
     }
   ],
   "targetDefaults": {
+    "build": {
+      "cache": true,
+      "parallelism": false
+    },
+    "serve": {
+      "cache": false,
+      "parallelism": false
+    },
+    "preview": {
+      "cache": false,
+      "parallelism": false
+    },
     "test": {
       "dependsOn": ["^build"]
     }

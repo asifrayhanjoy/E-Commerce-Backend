@@ -43,12 +43,10 @@
       "continuous": true,
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
-      "dependsOn": [
-        "build"
-      ],
       "options": {
         "buildTarget": "@e-commerce-bg/product-service:build",
         "inspect": false,
+        "debounce": 1000,
         "runBuildTargetDependencies": false
       },
       "configurations": {

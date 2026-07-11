@@ -3,8 +3,16 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "dev": "nx serve @e-commerce-bg/E-Commerce-BG",
-    "product-service": "nx serve @e-commerce-bg/product-service"
+    "dev": "node ../tools/ecommerce-maintenance.mjs start --workspace bg --project @e-commerce-bg/E-Commerce-BG --port 8080 -- nx serve @e-commerce-bg/E-Commerce-BG",
+    "product-service": "node ../tools/ecommerce-maintenance.mjs start --workspace bg --project @e-commerce-bg/product-service --port 8181 -- nx serve @e-commerce-bg/product-service",
+    "build": "node ../tools/ecommerce-maintenance.mjs run --workspace bg --project @e-commerce-bg/E-Commerce-BG --lock build -- nx build @e-commerce-bg/E-Commerce-BG",
+    "build:product-service": "node ../tools/ecommerce-maintenance.mjs run --workspace bg --project @e-commerce-bg/product-service --lock build -- nx build @e-commerce-bg/product-service",
+    "stop": "node ../tools/ecommerce-maintenance.mjs stop --workspace bg",
+    "sweep": "node ../tools/ecommerce-maintenance.mjs sweep --workspace bg",
+    "clean": "node ../tools/ecommerce-maintenance.mjs clean --workspace bg",
+    "reset": "node ../tools/ecommerce-maintenance.mjs reset --workspace bg",
+    "doctor": "node ../tools/ecommerce-maintenance.mjs doctor --workspace bg",
+    "health": "node ../tools/ecommerce-maintenance.mjs health --workspace bg --write"
   },
   "private": true,
   "dependencies": {

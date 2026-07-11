@@ -1,6 +1,15 @@
 import { NextFunction, Request, Response } from "express";
 import ImageKit from "imagekit";
 import prisma from "../libs/prisma";
+import { Prisma } from "@prisma/client";
+
+declare global {
+  namespace Express {
+    interface Request {
+      seller?: { id: string };
+    }
+  }
+}
 
 const imagekit = new ImageKit({
   publicKey: process.env.IMAGEKIT_PUBLIC_KEY || "",
@@ -37,6 +46,41 @@ class NotFoundError extends Error {
     this.status = 404;
   }
 }
+
+const getProductObjectIdQuery = (productId: string) => {
+  if (!/^[a-f\d]{24}$/i.test(productId)) {
+    throw new ValidationError("Invalid product id");
+  }
+
+  return { _id: { $oid: productId } };
+};
+
+const getTrackingCounts = async (productId: string) => {
+  const result: any = await prisma.$runCommandRaw({
+    aggregate: "products",
+    pipeline: [
+      { $match: getProductObjectIdQuery(productId) },
+      {
+        $project: {
+          _id: 0,
+          views: { $size: { $ifNull: ["$trackingViewKeys", []] } },
+          wishes: { $size: { $ifNull: ["$trackingWishKeys", []] } },
+        },
+      },
+    ],
+    cursor: {},
+  });
+
+  return result?.cursor?.firstBatch?.[0] || { views: 0, wishes: 0 };
+};
+
+const normalizeTrackingKey = (value: unknown) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().slice(0, 300);
+};
 
 export const getCategories = async ( _req: Request, res: Response, next: NextFunction ) => {
   try {
@@ -438,5 +482,216 @@ export const restoreProduct = async ( req: any, res: Response, next: NextFunctio
     return res
       .status(500)
       .json({ message: "Error restoring product", error });
+  }
+};
+
+
+// get seller stripe information
+export const getStripeAccount = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const sellerId = req.seller?.id;
+
+    if (!sellerId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId,
+      },
+    });
+
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        message: "Shop not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      stripeAccount: {
+        accountId: (shop as any).stripeAccountId,
+        status: (shop as any).stripeAccountStatus,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// get All products
+export const getAllProducts = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const skip = (page - 1) * limit;
+    const type = req.query.type;
+
+    const baseFilter: Prisma.productsWhereInput = {
+      AND: [
+        {
+          OR: [
+            { starting_date: null },
+            { starting_date: { isSet: false } },
+          ],
+        },
+        {
+          OR: [
+            { ending_date: null },
+            { ending_date: { isSet: false } },
+          ],
+        },
+      ],
+    };
+
+    const orderBy: Prisma.productsOrderByWithRelationInput =
+      type === "latest"
+        ? { createdAt: "desc" as Prisma.SortOrder }
+        : { createdAt: "desc" as Prisma.SortOrder };
+
+    const [products, total, top10Products] = await Promise.all([
+      prisma.products.findMany({
+        skip,
+        take: limit,
+        include: {
+          images: true,
+          Shop: true,
+        },
+        where: baseFilter,
+        orderBy,
+      }),
+
+      prisma.products.count({
+        where: baseFilter,
+      }),
+
+      prisma.products.findMany({
+        take: 10,
+        where: baseFilter,
+        orderBy,
+      }),
+    ]);
+
+    res.status(200).json({
+      products,
+      top10By: type === "latest" ? "latest" : "topSales",
+      top10Products,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getProductTracking = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const productId = Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId;
+    const counts = await getTrackingCounts(productId);
+
+    res.status(200).json({
+      success: true,
+      productId: req.params.productId,
+      ...counts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const trackProductView = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
+
+    if (!trackingKey) {
+      return next(new ValidationError("Tracking key is required"));
+    }
+
+    const productId = Array.isArray(req.params.productId)
+      ? req.params.productId[0]
+      : req.params.productId;
+
+    await prisma.$runCommandRaw({
+      update: "products",
+      updates: [
+        {
+          q: getProductObjectIdQuery(productId),
+          u: {
+            $addToSet: { trackingViewKeys: trackingKey },
+            $currentDate: { trackingUpdatedAt: true },
+          },
+          upsert: false,
+        },
+      ],
+    });
+
+    const counts = await getTrackingCounts(productId);
+
+    res.status(200).json({
+      success: true,
+      productId: req.params.productId,
+      ...counts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const trackProductWishlist = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
+    const action = req.body?.action === "remove" ? "remove" : "add";
+
+    if (!trackingKey) {
+      return next(new ValidationError("Tracking key is required"));
+    }
+
+    await prisma.$runCommandRaw({
+      update: "products",
+      updates: [
+        {
+          q: getProductObjectIdQuery(Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId),
+          u:
+            action === "remove"
+              ? {
+                  $pull: { trackingWishKeys: trackingKey },
+                  $currentDate: { trackingUpdatedAt: true },
+                }
+              : {
+                  $addToSet: { trackingWishKeys: trackingKey },
+                  $currentDate: { trackingUpdatedAt: true },
+                },
+          upsert: false,
+        },
+      ],
+    });
+
+    const productId = Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId;
+    const counts = await getTrackingCounts(productId);
+
+    res.status(200).json({
+      success: true,
+      productId: productId,
+      ...counts,
+    });
+  } catch (error) {
+    next(error);
   }
 };

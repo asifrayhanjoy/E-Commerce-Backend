@@ -65,13 +65,22 @@ const getTrackingCounts = async (productId: string) => {
           _id: 0,
           views: { $size: { $ifNull: ["$trackingViewKeys", []] } },
           wishes: { $size: { $ifNull: ["$trackingWishKeys", []] } },
+          carts: {
+            $sum: {
+              $map: {
+                input: { $ifNull: ["$trackingCartItems", []] },
+                as: "item",
+                in: { $ifNull: ["$$item.quantity", 0] },
+              },
+            },
+          },
         },
       },
     ],
     cursor: {},
   });
 
-  return result?.cursor?.firstBatch?.[0] || { views: 0, wishes: 0 };
+  return result?.cursor?.firstBatch?.[0] || { views: 0, wishes: 0, carts: 0 };
 };
 
 const normalizeTrackingKey = (value: unknown) => {
@@ -81,6 +90,40 @@ const normalizeTrackingKey = (value: unknown) => {
 
   return value.trim().slice(0, 300);
 };
+
+const normalizeTrackingText = (value: unknown) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().slice(0, 300);
+};
+
+const getTrackingShopId = async (productId: string, requestShopId: unknown) => {
+  const shopId = normalizeTrackingText(requestShopId);
+
+  if (shopId) {
+    return shopId;
+  }
+
+  const product = await prisma.products.findUnique({
+    where: { id: productId },
+    select: { shopId: true },
+  });
+
+  return product?.shopId || "";
+};
+
+const createTrackingEvent = (
+  productId: string,
+  shopId: string,
+  action: string
+) => ({
+  productId,
+  shopId,
+  action,
+  timestamp: new Date().toISOString(),
+});
 
 export const getCategories = async ( _req: Request, res: Response, next: NextFunction ) => {
   try {
@@ -589,6 +632,59 @@ export const getAllProducts = async ( req: Request, res: Response, next: NextFun
   }
 };
 
+export const getProductDetails = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const productId =
+      typeof req.query.productId === "string"
+        ? req.query.productId
+        : typeof req.query.id === "string"
+          ? req.query.id
+          : "";
+    const slug = typeof req.query.slug === "string" ? req.query.slug : "";
+    const visibleProductFilter = {
+      OR: [
+        { isDeleted: false },
+        { isDeleted: null },
+        { isDeleted: { isSet: false } },
+      ],
+    };
+
+    if (productId && !/^[a-f\d]{24}$/i.test(productId)) {
+      return next(new ValidationError("Invalid product id"));
+    }
+
+    const product = await prisma.products.findFirst({
+      where: {
+        ...visibleProductFilter,
+        ...(productId ? { id: productId } : {}),
+        ...(slug ? { slug } : {}),
+      },
+      include: {
+        images: true,
+        Shop: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    if (!product) {
+      return next(new NotFoundError("Product not found"));
+    }
+
+    return res.status(200).json({
+      success: true,
+      product,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getProductTracking = async (
   req: Request,
   res: Response,
@@ -663,19 +759,29 @@ export const trackProductWishlist = async (
       return next(new ValidationError("Tracking key is required"));
     }
 
+    const productId = Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId;
+    const shopId = await getTrackingShopId(productId, req.body?.shopId);
+    const trackingEvent = createTrackingEvent(
+      productId,
+      shopId,
+      action === "remove" ? "remove_from_wishlist" : "add_to_wishlist"
+    );
+
     await prisma.$runCommandRaw({
       update: "products",
       updates: [
         {
-          q: getProductObjectIdQuery(Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId),
+          q: getProductObjectIdQuery(productId),
           u:
             action === "remove"
               ? {
                   $pull: { trackingWishKeys: trackingKey },
+                  $push: { trackingEvents: trackingEvent },
                   $currentDate: { trackingUpdatedAt: true },
                 }
               : {
                   $addToSet: { trackingWishKeys: trackingKey },
+                  $push: { trackingEvents: trackingEvent },
                   $currentDate: { trackingUpdatedAt: true },
                 },
           upsert: false,
@@ -683,12 +789,155 @@ export const trackProductWishlist = async (
       ],
     });
 
-    const productId = Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId;
     const counts = await getTrackingCounts(productId);
 
     res.status(200).json({
       success: true,
       productId: productId,
+      ...counts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const trackProductCart = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
+    const action =
+      req.body?.action === "remove"
+        ? "remove"
+        : req.body?.action === "set"
+          ? "set"
+          : "add";
+    const quantity = Math.max(1, Number(req.body?.quantity) || 1);
+
+    if (!trackingKey) {
+      return next(new ValidationError("Tracking key is required"));
+    }
+
+    const productId = Array.isArray(req.params.productId)
+      ? req.params.productId[0]
+      : req.params.productId;
+    const shopId = await getTrackingShopId(productId, req.body?.shopId);
+    const trackingEvent = createTrackingEvent(
+      productId,
+      shopId,
+      action === "remove"
+        ? "remove_from_cart"
+        : action === "set"
+          ? "update_cart"
+          : "add_to_cart"
+    );
+
+    const addOrSetCartItemUpdate = [
+      {
+        $set: {
+          trackingCartItems: {
+            $let: {
+              vars: {
+                cartItems: { $ifNull: ["$trackingCartItems", []] },
+              },
+              in: {
+                $cond: [
+                  {
+                    $in: [
+                      trackingKey,
+                      {
+                        $map: {
+                          input: "$$cartItems",
+                          as: "item",
+                          in: "$$item.key",
+                        },
+                      },
+                    ],
+                  },
+                  {
+                    $map: {
+                      input: "$$cartItems",
+                      as: "item",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$item.key", trackingKey] },
+                          {
+                            key: "$$item.key",
+                            quantity:
+                              action === "set"
+                                ? quantity
+                                : {
+                                    $add: [
+                                      { $ifNull: ["$$item.quantity", 0] },
+                                      quantity,
+                                    ],
+                                  },
+                          },
+                          "$$item",
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    $concatArrays: [
+                      "$$cartItems",
+                      [{ key: trackingKey, quantity }],
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          trackingEvents: {
+            $concatArrays: [
+              { $ifNull: ["$trackingEvents", []] },
+              [trackingEvent],
+            ],
+          },
+          trackingUpdatedAt: "$$NOW",
+        },
+      },
+    ];
+
+    const removeCartItemUpdate = [
+      {
+        $set: {
+          trackingCartItems: {
+            $filter: {
+              input: { $ifNull: ["$trackingCartItems", []] },
+              as: "item",
+              cond: { $ne: ["$$item.key", trackingKey] },
+            },
+          },
+          trackingEvents: {
+            $concatArrays: [
+              { $ifNull: ["$trackingEvents", []] },
+              [trackingEvent],
+            ],
+          },
+          trackingUpdatedAt: "$$NOW",
+        },
+      },
+    ];
+
+    await prisma.$runCommandRaw({
+      update: "products",
+      updates: [
+        {
+          q: getProductObjectIdQuery(productId),
+          u: action === "remove" ? removeCartItemUpdate : addOrSetCartItemUpdate,
+          upsert: false,
+        },
+      ],
+    });
+
+    const counts = await getTrackingCounts(productId);
+
+    res.status(200).json({
+      success: true,
+      productId,
       ...counts,
     });
   } catch (error) {

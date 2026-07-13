@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createShop, createStripeConnectLink, getSeller, getUser, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
+import { createShop, createStripeConnectLink, createUserAddress, deleteUserAddress, getSeller, getUser, getUserAddresses, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
 import { verifyForgotPasswordOtp } from "../utils/auth.helper";
 import isAuthenticated from "../utils/middleware/isAuthenticated";
 import { isSeller } from "../utils/middleware/AuthorizeRole";
@@ -15,6 +15,10 @@ router.post("/forgot-password-user", userForgotPassword);
 router.post("/reset-password-user", resetUserPassword);
 router.post("/verify-forgot-password-user", verifyForgotPasswordOtp);
 router.get("/login-in-user", isAuthenticated, getUser);
+router.get("/addresses", isAuthenticated, getUserAddresses);
+router.post("/addresses", isAuthenticated, createUserAddress);
+router.put("/addresses/:addressId", isAuthenticated, updateUserAddress);
+router.delete("/addresses/:addressId", isAuthenticated, deleteUserAddress);
                   // {seller}
 router.post("/seller-register", registerSeller);
 router.post("/verify-seller", verifySeller);

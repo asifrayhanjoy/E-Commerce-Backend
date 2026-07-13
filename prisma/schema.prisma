@@ -18,6 +18,24 @@ model users {
   updatedAt   DateTime      @updatedAt
   imagesId    String?       @db.ObjectId
   shopReviews shopReviews[]
+  addresses   user_addresses[]
+}
+
+model user_addresses {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      users    @relation(fields: [userId], references: [id])
+  label     String
+  name      String
+  street    String
+  city      String
+  zip       String
+  country   String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model images {

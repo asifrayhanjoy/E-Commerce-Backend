@@ -114,16 +114,298 @@ const getTrackingShopId = async (productId: string, requestShopId: unknown) => {
   return product?.shopId || "";
 };
 
-const createTrackingEvent = (
-  productId: string,
-  shopId: string,
-  action: string
-) => ({
+const createTrackingEvent = ( productId: string, shopId: string, action: string ) => ({
   productId,
   shopId,
   action,
   timestamp: new Date().toISOString(),
 });
+
+const normalizeProductReview = (review: any) => {
+  const rawId = review?.id || review?._id;
+  const id =
+    typeof rawId === "object" && rawId?.$oid
+      ? rawId.$oid
+      : typeof rawId === "string"
+        ? rawId
+        : "";
+  const comment =
+    typeof review?.comment === "string"
+      ? review.comment
+      : typeof review?.review === "string"
+        ? review.review
+        : typeof review?.reviews === "string"
+          ? review.reviews
+          : "";
+  const user = review?.user
+    ? {
+        id: review.user.id || review.user._id || "",
+        name: review.user.name || review.userName || review.name || "Customer",
+      }
+    : {
+        id: review?.userId || "",
+        name: review?.userName || review?.name || "Customer",
+      };
+
+  return {
+    id,
+    rating: Number(review?.rating) || 0,
+    comment,
+    createdAt: review?.createdAt || null,
+    user,
+  };
+};
+
+const getRawProductReviews = async (productId: string) => {
+  const result: any = await prisma.$runCommandRaw({
+    aggregate: "products",
+    pipeline: [
+      { $match: getProductObjectIdQuery(productId) },
+      {
+        $project: {
+          _id: 0,
+          reviews: { $ifNull: ["$reviews", []] },
+          productReviews: { $ifNull: ["$productReviews", []] },
+        },
+      },
+    ],
+    cursor: {},
+  });
+  const rawProduct = result?.cursor?.firstBatch?.[0] || {};
+
+  if (Array.isArray(rawProduct.reviews) && rawProduct.reviews.length > 0) {
+    return rawProduct.reviews.map(normalizeProductReview);
+  }
+
+  if (
+    Array.isArray(rawProduct.productReviews) &&
+    rawProduct.productReviews.length > 0
+  ) {
+    return rawProduct.productReviews.map(normalizeProductReview);
+  }
+
+  return [];
+};
+
+const getFirstQueryValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return getFirstQueryValue(value[0]);
+  }
+
+  return typeof value === "string" ? value.trim() : "";
+};
+
+const getQueryValues = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap(getQueryValues);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const uniqueQueryValues = (...values: unknown[]) => [
+  ...new Set(values.flatMap(getQueryValues)),
+];
+
+const getQueryNumber = (value: unknown) => {
+  const rawValue = getFirstQueryValue(value);
+  const parsedValue = Number(rawValue);
+
+  return rawValue && Number.isFinite(parsedValue) ? parsedValue : undefined;
+};
+
+const getPriceRangeValues = (value: unknown): number[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap(getPriceRangeValues);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(/,|-/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+};
+
+const publicProductFilters = (): Prisma.productsWhereInput[] => [
+  {
+    OR: [
+      { isDeleted: false },
+      { isDeleted: null },
+      { isDeleted: { isSet: false } },
+    ],
+  },
+  {
+    OR: [
+      { starting_date: null },
+      { starting_date: { isSet: false } },
+    ],
+  },
+  {
+    OR: [
+      { ending_date: null },
+      { ending_date: { isSet: false } },
+    ],
+  },
+];
+
+const getFilteredProductOrderBy = (
+  value: unknown
+): Prisma.productsOrderByWithRelationInput => {
+  switch (getFirstQueryValue(value)) {
+    case "oldest":
+      return { createdAt: "asc" };
+    case "price_asc":
+    case "price-low-to-high":
+    case "low-to-high":
+      return { sale_price: "asc" };
+    case "price_desc":
+    case "price-high-to-low":
+    case "high-to-low":
+      return { sale_price: "desc" };
+    case "rating":
+    case "top-rated":
+      return { ratings: "desc" };
+    case "latest":
+    default:
+      return { createdAt: "desc" };
+  }
+};
+
+const publicProductInclude = {
+  images: true,
+  Shop: true,
+} satisfies Prisma.productsInclude;
+
+const getHomeProductLimit = (value: unknown) =>
+  Math.min(Math.max(1, getQueryNumber(value) || 10), 20);
+
+const getDiscountPercent = (product: {
+  regular_price?: number | null;
+  sale_price?: number | null;
+}) => {
+  const regularPrice = Number(product.regular_price || 0);
+  const salePrice = Number(product.sale_price || 0);
+
+  if (!regularPrice || !salePrice || regularPrice <= salePrice) {
+    return 0;
+  }
+
+  return ((regularPrice - salePrice) / regularPrice) * 100;
+};
+
+const getTopOffers = async (
+  where: Prisma.productsWhereInput,
+  limit: number
+) => {
+  const candidates = await prisma.products.findMany({
+    take: Math.max(limit * 4, 40),
+    where: {
+      AND: [
+        where,
+        {
+          sale_price: {
+            gt: 0,
+          },
+        },
+        {
+          regular_price: {
+            gt: 0,
+          },
+        },
+      ],
+    },
+    include: publicProductInclude,
+    orderBy: [
+      {
+        ratings: "desc",
+      },
+      {
+        createdAt: "desc",
+      },
+    ],
+  });
+
+  return candidates
+    .filter((product) => getDiscountPercent(product) > 0)
+    .sort((first, second) => {
+      const discountDifference =
+        getDiscountPercent(second) - getDiscountPercent(first);
+
+      if (discountDifference !== 0) {
+        return discountDifference;
+      }
+
+      const ratingDifference =
+        Number(second.ratings || 0) - Number(first.ratings || 0);
+
+      if (ratingDifference !== 0) {
+        return ratingDifference;
+      }
+
+      return (
+        new Date(second.createdAt).getTime() -
+        new Date(first.createdAt).getTime()
+      );
+    })
+    .slice(0, limit);
+};
+
+const getTopHomeShops = async (limit: number) => {
+  const shops = await prisma.shops.findMany({
+    take: limit,
+    include: {
+      avatar: true,
+      sellers: true,
+      products: {
+        where: {
+          AND: publicProductFilters(),
+        },
+        include: {
+          images: true,
+        },
+      },
+      _count: {
+        select: {
+          products: true,
+          reviews: true,
+        },
+      },
+    },
+    orderBy: [
+      {
+        ratings: "desc",
+      },
+      {
+        createdAt: "desc",
+      },
+    ],
+  });
+
+  return Promise.all(
+    shops.map(async (shop) => ({
+      ...shop,
+      followersCount: await prisma.users.count({
+        where: {
+          following: {
+            has: shop.id,
+          },
+        },
+      }),
+    }))
+  );
+};
 
 export const getCategories = async ( _req: Request, res: Response, next: NextFunction ) => {
   try {
@@ -528,7 +810,6 @@ export const restoreProduct = async ( req: any, res: Response, next: NextFunctio
   }
 };
 
-
 // get seller stripe information
 export const getStripeAccount = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
@@ -632,11 +913,349 @@ export const getAllProducts = async ( req: Request, res: Response, next: NextFun
   }
 };
 
-export const getProductDetails = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+// get home products
+export const getHomeProducts = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const limit = getHomeProductLimit(req.query.limit);
+    const where: Prisma.productsWhereInput = {
+      AND: publicProductFilters(),
+    };
+
+    const [suggestedProducts, latestProducts, topShops, topOffers] =
+      await Promise.all([
+        prisma.products.findMany({
+          take: limit,
+          where,
+          include: publicProductInclude,
+          orderBy: [
+            {
+              ratings: "desc",
+            },
+            {
+              createdAt: "desc",
+            },
+          ],
+        }),
+        prisma.products.findMany({
+          take: limit,
+          where,
+          include: publicProductInclude,
+          orderBy: {
+            createdAt: "desc",
+          },
+        }),
+        getTopHomeShops(limit),
+        getTopOffers(where, limit),
+      ]);
+
+    return res.status(200).json({
+      success: true,
+      suggestedProducts,
+      latestProducts,
+      topShops,
+      topOffers,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// get filtered products
+export const getFilteredProducts = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const page = Math.max(1, getQueryNumber(req.query.page) || 1);
+    const limit = Math.min(
+      Math.max(1, getQueryNumber(req.query.limit) || 12),
+      100
+    );
+    const skip = (page - 1) * limit;
+    const categories = uniqueQueryValues(
+      req.query.category,
+      req.query.categories
+    );
+    const subCategories = uniqueQueryValues(
+      req.query.subCategory,
+      req.query.subcategory,
+      req.query.subCategories,
+      req.query.subcategories
+    );
+    const brands = uniqueQueryValues(req.query.brand, req.query.brands);
+    const colors = uniqueQueryValues(req.query.color, req.query.colors);
+    const sizes = uniqueQueryValues(req.query.size, req.query.sizes);
+    const parsedPriceRange = getPriceRangeValues(req.query.priceRange);
+    const priceRange = parsedPriceRange.length ? parsedPriceRange : [0, 10000];
+    const minPrice =
+      getQueryNumber(req.query.minPrice) ??
+      priceRange[0];
+    const maxPrice =
+      getQueryNumber(req.query.maxPrice) ??
+      priceRange[1];
+    const minRating =
+      getQueryNumber(req.query.minRating) ??
+      getQueryNumber(req.query.rating);
+    const cashOnDelivery = getFirstQueryValue(req.query.cashOnDelivery);
+    const search =
+      getFirstQueryValue(req.query.search) ||
+      getFirstQueryValue(req.query.searchQuery) ||
+      getFirstQueryValue(req.query.q) ||
+      getFirstQueryValue(req.query.title);
+
+    const filters: Prisma.productsWhereInput[] = publicProductFilters();
+
+    if (categories.length) {
+      filters.push({
+        OR: categories.map((category) => ({
+          category: { equals: category, mode: "insensitive" },
+        })),
+      });
+    }
+
+    if (subCategories.length) {
+      filters.push({
+        OR: subCategories.map((subCategory) => ({
+          subCategory: { equals: subCategory, mode: "insensitive" },
+        })),
+      });
+    }
+
+    if (brands.length) {
+      filters.push({
+        OR: brands.map((brand) => ({
+          brand: { equals: brand, mode: "insensitive" },
+        })),
+      });
+    }
+
+    if (colors.length) {
+      filters.push({
+        OR: colors.map((color) => ({
+          colors: { contains: color, mode: "insensitive" },
+        })),
+      });
+    }
+
+    if (sizes.length) {
+      filters.push({
+        sizes: { hasSome: sizes },
+      });
+    }
+
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      const priceFilter: Prisma.FloatFilter<"products"> = {};
+
+      if (minPrice !== undefined) {
+        priceFilter.gte = minPrice;
+      }
+
+      if (maxPrice !== undefined) {
+        priceFilter.lte = maxPrice;
+      }
+
+      filters.push({
+        sale_price: priceFilter,
+      });
+    }
+
+    if (minRating !== undefined) {
+      filters.push({
+        ratings: { gte: minRating },
+      });
+    }
+
+    if (cashOnDelivery) {
+      filters.push({
+        cashOnDelivery: { equals: cashOnDelivery, mode: "insensitive" },
+      });
+    }
+
+    if (search) {
+      filters.push({
+        OR: [
+          { title: { contains: search, mode: "insensitive" } },
+          { short_description: { contains: search, mode: "insensitive" } },
+          { detailed_description: { contains: search, mode: "insensitive" } },
+          { tags: { contains: search, mode: "insensitive" } },
+          { brand: { contains: search, mode: "insensitive" } },
+        ],
+      });
+    }
+
+    const where: Prisma.productsWhereInput = {
+      AND: filters,
+    };
+
+    const [products, total] = await Promise.all([
+      prisma.products.findMany({
+        skip,
+        take: limit,
+        where,
+        include: {
+          images: true,
+          Shop: true,
+        },
+        orderBy: getFilteredProductOrderBy(
+          req.query.sortBy || req.query.sort || req.query.type
+        ),
+      }),
+      prisma.products.count({
+        where,
+      }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      products,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      filters: {
+        categories,
+        subCategories,
+        brands,
+        colors,
+        sizes,
+        minPrice,
+        maxPrice,
+        minRating,
+        cashOnDelivery,
+        search,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// get filtered shops
+export const getFilteredShops = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const categories = uniqueQueryValues(
+      req.query.category,
+      req.query.categories
+    );
+    const countries = uniqueQueryValues(
+      req.query.country,
+      req.query.countries
+    );
+    const page = Math.max(1, getQueryNumber(req.query.page) || 1);
+    const limit = Math.min(
+      Math.max(1, getQueryNumber(req.query.limit) || 12),
+      100
+    );
+    const skip = (page - 1) * limit;
+    const filters: Prisma.shopsWhereInput[] = [];
+
+    if (categories.length) {
+      filters.push({
+        OR: categories.map((category) => ({
+          category: { equals: category, mode: "insensitive" },
+        })),
+      });
+    }
+
+    if (countries.length) {
+      filters.push({
+        sellers: {
+          is: {
+            OR: countries.map((country) => ({
+              country: { equals: country, mode: "insensitive" },
+            })),
+          },
+        },
+      });
+    }
+
+    const where: Prisma.shopsWhereInput = filters.length
+      ? { AND: filters }
+      : {};
+
+    const [shops, total] = await Promise.all([
+      prisma.shops.findMany({
+        skip,
+        take: limit,
+        where,
+        include: {
+          avatar: true,
+          sellers: true,
+          products: {
+            where: {
+              AND: publicProductFilters(),
+            },
+            include: {
+              images: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      }),
+      prisma.shops.count({
+        where,
+      }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      shops,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      filters: {
+        categories,
+        countries,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// search products
+export const searchProducts = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const query = getFirstQueryValue(req.query.q);
+
+    if (!query || query.trim().length === 0) {
+      return res.status(400).json({ message: "Search query is required." });
+    }
+
+    const products = await prisma.products.findMany({
+      where: {
+        AND: [
+          ...publicProductFilters(),
+          {
+            OR: [
+              { title: { contains: query, mode: "insensitive" } },
+              { short_description: { contains: query, mode: "insensitive" } },
+              { detailed_description: { contains: query, mode: "insensitive" } },
+              { category: { contains: query, mode: "insensitive" } },
+              { subCategory: { contains: query, mode: "insensitive" } },
+              { tags: { contains: query, mode: "insensitive" } },
+              { brand: { contains: query, mode: "insensitive" } },
+            ],
+          },
+        ],
+      },
+      include: {
+        images: true,
+        Shop: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      products,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getProductDetails = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
     const productId =
       typeof req.query.productId === "string"
@@ -665,7 +1284,23 @@ export const getProductDetails = async (
       },
       include: {
         images: true,
-        Shop: true,
+        Shop: {
+          include: {
+            reviews: {
+              orderBy: {
+                createdAt: "desc",
+              },
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -676,20 +1311,23 @@ export const getProductDetails = async (
       return next(new NotFoundError("Product not found"));
     }
 
+    const rawProductReviews = await getRawProductReviews(product.id);
+    const shopReviews = product.Shop?.reviews?.map(normalizeProductReview) || [];
+    const reviews = rawProductReviews.length > 0 ? rawProductReviews : shopReviews;
+
     return res.status(200).json({
       success: true,
-      product,
+      product: {
+        ...product,
+        reviews,
+      },
     });
   } catch (error) {
     next(error);
   }
 };
 
-export const getProductTracking = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export const getProductTracking = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
     const productId = Array.isArray(req.params.productId) ? req.params.productId[0] : req.params.productId;
     const counts = await getTrackingCounts(productId);
@@ -704,11 +1342,8 @@ export const getProductTracking = async (
   }
 };
 
-export const trackProductView = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+
+export const trackProductView = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
     const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
 
@@ -746,11 +1381,8 @@ export const trackProductView = async (
   }
 };
 
-export const trackProductWishlist = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+// trackProductWishlist
+export const trackProductWishlist = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
     const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
     const action = req.body?.action === "remove" ? "remove" : "add";
@@ -801,11 +1433,8 @@ export const trackProductWishlist = async (
   }
 };
 
-export const trackProductCart = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+// trackProductCart
+export const trackProductCart = async ( req: Request, res: Response, next: NextFunction ) => {
   try {
     const trackingKey = normalizeTrackingKey(req.body?.trackingKey);
     const action =
@@ -942,5 +1571,42 @@ export const trackProductCart = async (
     });
   } catch (error) {
     next(error);
+  }
+};
+
+// top shops
+export const topShops = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const shops = await prisma.shops.findMany({
+      take: 10,
+      orderBy: [
+        {
+          ratings: "desc",
+        },
+        {
+          createdAt: "desc",
+        },
+      ],
+      select: {
+        id: true,
+        name: true,
+        avatar: true,
+        coverBanner: true,
+        address: true,
+        ratings: true,
+        category: true,
+        _count: {
+          select: {
+            products: true,
+            reviews: true,
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({ shops });
+  } catch (error) {
+    console.error("Error fetching top shops:", error);
+    return next(error);
   }
 };

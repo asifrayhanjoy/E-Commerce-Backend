@@ -9,7 +9,7 @@ import morgan from "morgan";
 import proxy from "express-http-proxy";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import cookieParser from "cookie-parser";
-import { errorMiddleware } from "./packages/error-handler/custom-error";
+import { errorMiddleware } from "./packages/error-handler";
 import authRouter from "./routes/auth.route";
 import initializeConfig from "./libs/initializeConfig";
 

@@ -114,6 +114,17 @@ model discount_codes {
   updatedAt     DateTime @updatedAt
 }
 
+model notifications {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  title         String
+  message       String
+  creatorId     String
+  receiverId    String
+  redirect_link String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 enum productStatus {
   Active
   Pending

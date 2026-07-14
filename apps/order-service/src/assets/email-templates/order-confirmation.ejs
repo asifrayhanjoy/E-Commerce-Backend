@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order Confirmation</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f4f7fb;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #222;
+    }
+
+    .container {
+      width: 100%;
+      padding: 40px 0;
+    }
+
+    .card {
+      width: 640px;
+      max-width: 95%;
+      margin: auto;
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, .08);
+    }
+
+    .header {
+      background: #111827;
+      color: #fff;
+      padding: 28px 32px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+
+    .body {
+      padding: 32px;
+      line-height: 1.6;
+    }
+
+    .items {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+    }
+
+    .items th,
+    .items td {
+      border-bottom: 1px solid #e5e7eb;
+      padding: 10px 0;
+      text-align: left;
+    }
+
+    .items th:last-child,
+    .items td:last-child {
+      text-align: right;
+    }
+
+    .total {
+      font-size: 18px;
+      font-weight: bold;
+      text-align: right;
+    }
+
+    .button {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 12px 18px;
+      background: #2563eb;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+    }
+
+    .footer {
+      padding: 22px 32px;
+      text-align: center;
+      font-size: 13px;
+      color: #777;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1><%= companyName %></h1>
+        <p>Order Confirmation</p>
+      </div>
+
+      <div class="body">
+        <h2>Hello <%= name %>,</h2>
+        <p>Your order has been confirmed. We will notify you when it is on the way.</p>
+
+        <table class="items">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Qty</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% cart.forEach((item) => { %>
+              <tr>
+                <td><%= item.title || item.name || item.id %></td>
+                <td><%= item.quantity %></td>
+                <td>$<%= Number(item.quantity * item.sale_price).toFixed(2) %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+
+        <p class="total">Total: $<%= Number(totalAmount).toFixed(2) %></p>
+        <a class="button" href="<%= trackingUrl %>">Track order</a>
+      </div>
+
+      <div class="footer">
+        &copy; <%= new Date().getFullYear() %> <%= companyName %>. All Rights Reserved.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

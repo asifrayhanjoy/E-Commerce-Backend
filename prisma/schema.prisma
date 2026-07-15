@@ -19,6 +19,7 @@ model users {
   imagesId    String?       @db.ObjectId
   shopReviews shopReviews[]
   addresses   user_addresses[]
+  orders      orders[]
 }
 
 model user_addresses {
@@ -73,11 +74,13 @@ model shops {
   opening_hours String?
   website       String?
   socialLinks   Json[]
+  storefront    Json?
   ratings       Float         @default(0)
   reviews       shopReviews[]
   sellerId      String        @unique @db.ObjectId
   sellers       sellers       @relation(fields: [sellerId], references: [id])
   products      products[]
+  orders        orders[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 }
@@ -95,6 +98,20 @@ model sellers {
   updatedAt    DateTime @updatedAt
   shopId       String?  @db.ObjectId
   shopsId      String?  @db.ObjectId
+}
+
+model seller_settings {
+  id                      String   @id @default(auto()) @map("_id") @db.ObjectId
+  sellerId                String   @unique @db.ObjectId
+  shopId                  String?  @db.ObjectId
+  lowStockAlertThreshold  Int      @default(10)
+  notifyEmail             Boolean  @default(true)
+  notifyWeb               Boolean  @default(true)
+  notifyApp               Boolean  @default(true)
+  customDomains           String[]
+  withdrawMethod          Json?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
 
 model site_config {
@@ -123,6 +140,24 @@ model notifications {
   redirect_link String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model orders {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @db.ObjectId
+  user              users    @relation(fields: [userId], references: [id])
+  shopId            String   @db.ObjectId
+  shop              shops    @relation(fields: [shopId], references: [id])
+  cart              Json
+  totalAmount       Float
+  coupon            Json?
+  paymentIntentId   String?
+  paymentSessionId  String?
+  paymentStatus     String   @default("Paid")
+  deliveryStatus    String   @default("Ordered")
+  shippingAddressId String?  @db.ObjectId
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 enum productStatus {

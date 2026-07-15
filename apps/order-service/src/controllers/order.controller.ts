@@ -34,6 +34,83 @@ const redisClient = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
+const DELIVERY_STATUSES = [
+  "Ordered",
+  "Packed",
+  "Shipped",
+  "Out for Delivery",
+  "Delivered",
+] as const;
+const SELLER_EARNING_RATE = 0.9;
+const ADMIN_FEE_RATE = 0.1;
+
+const getOrderLookupConditions = (orderId: string) => {
+  const conditions: any[] = [
+    { paymentSessionId: orderId },
+    { paymentIntentId: orderId },
+  ];
+
+  if (/^[a-f\d]{24}$/i.test(orderId)) {
+    conditions.unshift({ id: orderId });
+  }
+
+  return conditions;
+};
+
+const getOrderShippingAddress = async (order: {
+  shippingAddressId?: string | null;
+  userId: string;
+}) => {
+  if (!order.shippingAddressId) {
+    return null;
+  }
+
+  return prisma.user_addresses.findFirst({
+    where: {
+      id: order.shippingAddressId,
+      userId: order.userId,
+    },
+    select: {
+      id: true,
+      label: true,
+      name: true,
+      street: true,
+      city: true,
+      zip: true,
+      country: true,
+      isDefault: true,
+    },
+  });
+};
+
+const toMoneyAmount = (value: number) => Number(value.toFixed(2));
+
+const getOrderPaymentTotal = (order: { totalAmount?: number | null }) => {
+  const totalAmount = Number(order.totalAmount || 0);
+
+  return Number.isFinite(totalAmount) ? totalAmount : 0;
+};
+
+const mapOrderToSellerPayment = (order: any) => {
+  const totalAmount = getOrderPaymentTotal(order);
+
+  return {
+    id: order.id,
+    orderId: order.id,
+    buyer: order.user,
+    buyerName: order.user?.name || order.user?.email || "Unknown Buyer",
+    buyerEmail: order.user?.email || null,
+    totalAmount: toMoneyAmount(totalAmount),
+    sellerEarning: toMoneyAmount(totalAmount * SELLER_EARNING_RATE),
+    adminFee: toMoneyAmount(totalAmount * ADMIN_FEE_RATE),
+    status: order.paymentStatus || "Paid",
+    paymentIntentId: order.paymentIntentId,
+    paymentSessionId: order.paymentSessionId,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+  };
+};
+
 const parseStoredSession = <T>(value: unknown): T => {
   if (typeof value === "string") {
     return JSON.parse(value) as T;
@@ -52,17 +129,14 @@ const isStripeTransferCapabilityError = (error: unknown) =>
   "code" in error &&
   (error as { code?: string }).code === "insufficient_capabilities_for_transfer";
 
-const createPlatformPaymentIntent = (
-  stripe: Stripe,
-  params: {
+const createPlatformPaymentIntent = ( stripe: Stripe, params: {
     amount: number;
     sessionId: string;
     userId: string;
     sellerStripeAccountId?: string;
     transferSkippedReason: string;
   }
-) =>
-  stripe.paymentIntents.create({
+) => stripe.paymentIntents.create({
     amount: params.amount,
     currency: "usd",
     payment_method_types: ["card"],
@@ -301,6 +375,7 @@ type PaymentSessionData = {
   userId: string;
   cart: OrderCartItem[];
   totalAmount?: number;
+  shippingAddressId?: string | null;
   coupon?: {
     discountedProductId?: string;
     discountPercent?: number;
@@ -383,6 +458,18 @@ export const createOrder = async (req: Request, res: Response, next: NextFunctio
     );
 
     for (const [shopId, orderItems] of Object.entries(shopGrouped)) {
+      const existingOrder = await prisma.orders.findFirst({
+        where: {
+          shopId,
+          paymentIntentId: paymentIntent.id,
+        },
+      });
+
+      if (existingOrder) {
+        console.log(`Order already processed for shop ${shopId}: ${existingOrder.id}`);
+        continue;
+      }
+
       let orderTotal = orderItems.reduce(
         (sum, item) => sum + item.quantity * item.sale_price,
         0
@@ -414,6 +501,21 @@ export const createOrder = async (req: Request, res: Response, next: NextFunctio
           },
         });
       }
+
+      await prisma.orders.create({
+        data: {
+          userId,
+          shopId,
+          cart: orderItems,
+          totalAmount: orderTotal,
+          coupon: coupon || null,
+          paymentIntentId: paymentIntent.id,
+          paymentSessionId: sessionId,
+          paymentStatus: "Paid",
+          deliveryStatus: "Ordered",
+          shippingAddressId: session.shippingAddressId || null,
+        },
+      });
 
       console.log(`Processed order for shop ${shopId}: ${orderTotal}`);
     }
@@ -455,6 +557,297 @@ export const createOrder = async (req: Request, res: Response, next: NextFunctio
     return res.status(200).json({
       received: true,
       message: "Order processed successfully",
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// get sellers orders
+export const getSellerOrders = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+
+    if (!seller?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only sellers can view shop orders.",
+      });
+    }
+
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        message: "Shop not found for this seller.",
+      });
+    }
+
+    // fetch all orders for this shop
+    const orders = await prisma.orders.findMany({
+      where: {
+        shopId: shop.id,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      orders,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// get seller payments
+export const getSellerPayments = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+
+    if (!seller?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only sellers can view shop payments.",
+      });
+    }
+
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        message: "Shop not found for this seller.",
+      });
+    }
+
+    const orders = await prisma.orders.findMany({
+      where: {
+        shopId: shop.id,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      payments: orders.map(mapOrderToSellerPayment),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// get seller order details
+export const getSellerOrder = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+    const orderId = req.params.orderId;
+
+    if (!seller?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only sellers can view shop orders.",
+      });
+    }
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required.",
+      });
+    }
+
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        message: "Shop not found for this seller.",
+      });
+    }
+
+    const order = await prisma.orders.findFirst({
+      where: {
+        shopId: shop.id,
+        OR: getOrderLookupConditions(orderId),
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+        shop: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            category: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    const shippingAddress = await getOrderShippingAddress(order);
+
+    return res.status(200).json({
+      success: true,
+      order: {
+        ...order,
+        paymentStatus: order.paymentStatus || "Paid",
+        deliveryStatus: order.deliveryStatus || "Ordered",
+        shippingAddress,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// update seller order delivery status
+export const updateSellerOrderDeliveryStatus = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+    const orderId = req.params.orderId;
+    const deliveryStatus = req.body?.deliveryStatus || req.body?.status;
+
+    if (!seller?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only sellers can update shop orders.",
+      });
+    }
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required.",
+      });
+    }
+
+    if (!DELIVERY_STATUSES.includes(deliveryStatus as typeof DELIVERY_STATUSES[number])) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid delivery status.",
+        allowedStatuses: DELIVERY_STATUSES,
+      });
+    }
+
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        message: "Shop not found for this seller.",
+      });
+    }
+
+    const existingOrder = await prisma.orders.findFirst({
+      where: {
+        shopId: shop.id,
+        OR: getOrderLookupConditions(orderId),
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    const order = await prisma.orders.update({
+      where: {
+        id: existingOrder.id,
+      },
+      data: {
+        deliveryStatus,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+        shop: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            category: true,
+          },
+        },
+      },
+    });
+
+    const shippingAddress = await getOrderShippingAddress(order);
+
+    return res.status(200).json({
+      success: true,
+      message: "Delivery status updated successfully.",
+      order: {
+        ...order,
+        paymentStatus: order.paymentStatus || "Paid",
+        deliveryStatus: order.deliveryStatus || "Ordered",
+        shippingAddress,
+      },
     });
   } catch (error) {
     return next(error);

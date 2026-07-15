@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createShop, createStripeConnectLink, createUserAddress, deleteUserAddress, getSeller, getUser, getUserAddresses, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
+import { createSellerStorefrontProduct, createShop, createStripeConnectLink, createUserAddress, deleteSellerShop, deleteUserAddress, getSeller, getSellerSettings, getSellerStorefront, getUser, getUserAddresses, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateSellerSettings, updateSellerStorefront, updateSellerStorefrontProduct, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
 import { verifyForgotPasswordOtp } from "../utils/auth.helper";
 import isAuthenticated from "../utils/middleware/isAuthenticated";
 import { isSeller } from "../utils/middleware/AuthorizeRole";
@@ -26,6 +26,13 @@ router.post("/create-shop", createShop);
 router.post("/create-stripe-link", createStripeConnectLink);
 router.post("/login-seller", sellerLogin);
 router.get("/loged-in-seller", isAuthenticated,isSeller, getSeller);
+router.get("/seller-settings", isAuthenticated,isSeller, getSellerSettings);
+router.put("/seller-settings", isAuthenticated,isSeller, updateSellerSettings);
+router.get("/seller-storefront", isAuthenticated,isSeller, getSellerStorefront);
+router.put("/seller-storefront", isAuthenticated,isSeller, updateSellerStorefront);
+router.post("/seller-storefront/products", isAuthenticated,isSeller, createSellerStorefrontProduct);
+router.put("/seller-storefront/products/:productId", isAuthenticated,isSeller, updateSellerStorefrontProduct);
+router.delete("/seller-shop", isAuthenticated,isSeller, deleteSellerShop);
 
 
 

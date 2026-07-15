@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node ../tools/ecommerce-maintenance.mjs start --workspace bg --project @e-commerce-bg/E-Commerce-BG --port 8080 -- nx serve @e-commerce-bg/E-Commerce-BG",
     "product-service": "node ../tools/ecommerce-maintenance.mjs start --workspace bg --project @e-commerce-bg/product-service --port 8181 -- nx serve @e-commerce-bg/product-service",
+    "order-service": "node ../tools/ecommerce-maintenance.mjs start --workspace bg --project @e-commerce-bg/order-service --port 8282 -- nx serve @e-commerce-bg/order-service",
     "build": "node ../tools/ecommerce-maintenance.mjs run --workspace bg --project @e-commerce-bg/E-Commerce-BG --lock build -- nx build @e-commerce-bg/E-Commerce-BG",
     "build:product-service": "node ../tools/ecommerce-maintenance.mjs run --workspace bg --project @e-commerce-bg/product-service --lock build -- nx build @e-commerce-bg/product-service",
     "stop": "node ../tools/ecommerce-maintenance.mjs stop --workspace bg",

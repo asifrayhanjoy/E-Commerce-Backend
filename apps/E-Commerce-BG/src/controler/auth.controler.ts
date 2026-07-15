@@ -4,18 +4,19 @@ import { validateRegistrationData, checkOtpRestrictions, trackOtpRequests, sendO
 import { AuthError, ValidationError } from "../packages/error-handler";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { setCookie } from "../utils/cookic/set.cookic";
+import { authCookieOptions, setCookie } from "../utils/cookic/set.cookic";
 import Stripe from "stripe";
+import ImageKit from "imagekit";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2026-06-24.dahlia",
 });
 
-const authCookieOptions = {
-  httpOnly: true,
-  secure: true,
-  sameSite: "none" as const,
-};
+const storefrontImagekit = new ImageKit({
+  publicKey: process.env.IMAGEKIT_PUBLIC_KEY || "",
+  privateKey: process.env.IMAGEKIT_PRIVATE_KEY || "",
+  urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || "",
+});
 
 const clearAuthCookie = (res: Response, name: string) => {
   res.clearCookie(name, authCookieOptions);
@@ -55,6 +56,381 @@ const validateAddressPayload = (payload: ReturnType<typeof getAddressPayload>) =
   }
 
   return null;
+};
+
+const DEFAULT_SELLER_SETTINGS = {
+  lowStockAlertThreshold: 10,
+  notifyEmail: true,
+  notifyWeb: true,
+  notifyApp: true,
+  customDomains: [] as string[],
+  withdrawMethod: null,
+};
+
+const getAuthenticatedSeller = (req: any) => {
+  const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+
+  if (req.role !== "seller" || !seller?.id) {
+    throw new AuthError("Access denied: Seller only");
+  }
+
+  return seller;
+};
+
+const normalizeCustomDomains = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .filter((domain): domain is string => typeof domain === "string")
+        .map((domain) => domain.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+};
+
+const normalizeWithdrawMethod = (value: unknown) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value === null ? null : undefined;
+  }
+
+  const method = value as Record<string, unknown>;
+
+  return {
+    type: typeof method.type === "string" ? method.type.trim() : "",
+    accountName:
+      typeof method.accountName === "string" ? method.accountName.trim() : "",
+    accountNumber:
+      typeof method.accountNumber === "string" ? method.accountNumber.trim() : "",
+    bankName: typeof method.bankName === "string" ? method.bankName.trim() : "",
+  };
+};
+
+const serializeSellerSettings = (settings: any) => ({
+  id: settings.id,
+  sellerId: settings.sellerId,
+  shopId: settings.shopId,
+  lowStockAlertThreshold: settings.lowStockAlertThreshold,
+  notificationPreferences: {
+    email: settings.notifyEmail,
+    web: settings.notifyWeb,
+    app: settings.notifyApp,
+  },
+  customDomains: settings.customDomains || [],
+  withdrawMethod: settings.withdrawMethod || null,
+  createdAt: settings.createdAt,
+  updatedAt: settings.updatedAt,
+});
+
+const DEFAULT_STOREFRONT_IMAGES = [
+  "https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1200&q=80",
+  "https://images.unsplash.com/photo-1503736334956-4c8f8e92946d?auto=format&fit=crop&w=520&q=80",
+  "https://images.unsplash.com/photo-1522069169874-c58ec4b76be5?auto=format&fit=crop&w=520&q=80",
+  "https://images.unsplash.com/photo-1552519507-da3b142c6e3d?auto=format&fit=crop&w=520&q=80",
+];
+
+const DEFAULT_AVATAR_URL =
+  "https://api.dicebear.com/9.x/adventurer/svg?seed=Becodemy&backgroundColor=a855f7";
+
+const DEFAULT_COVER_TAGS = ["AI", "Photo", "Arts"];
+const DEFAULT_COVER_PRICE = 12;
+const MAX_STOREFRONT_IMAGE_LENGTH = 10 * 1024 * 1024;
+
+const normalizeText = (value: unknown, maxLength = 500) => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  return value.trim().slice(0, maxLength);
+};
+
+const normalizeUrl = (value: unknown) => {
+  const url = normalizeText(value, 1000);
+
+  if (url === undefined) {
+    return undefined;
+  }
+
+  if (url === "") {
+    return null;
+  }
+
+  if (!/^https?:\/\//i.test(url)) {
+    throw new ValidationError("Links must start with http:// or https://");
+  }
+
+  return url;
+};
+
+const normalizeActionLink = (value: unknown) => {
+  const link = normalizeText(value, 1000);
+
+  if (link === undefined) {
+    return undefined;
+  }
+
+  if (link === "") {
+    return "";
+  }
+
+  if (!/^https?:\/\//i.test(link) && !link.startsWith("/")) {
+    throw new ValidationError("Button links must start with http://, https://, or /");
+  }
+
+  return link;
+};
+
+const normalizeStringArray = (value: unknown, maxItems = 8, maxLength = 60) => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().slice(0, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+};
+
+const getStorefrontConfig = (shop: any) => {
+  const config = shop?.storefront;
+
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return {};
+  }
+
+  return config as Record<string, any>;
+};
+
+const isDataImage = (value: string) =>
+  /^data:image\/[a-z0-9.+-]+;base64,/i.test(value);
+
+const hasImageKitConfig = () =>
+  Boolean(
+    process.env.IMAGEKIT_PUBLIC_KEY &&
+      process.env.IMAGEKIT_PRIVATE_KEY &&
+      process.env.IMAGEKIT_URL_ENDPOINT
+  );
+
+const normalizeImageValue = (value: unknown) => {
+  const image = normalizeText(value, MAX_STOREFRONT_IMAGE_LENGTH);
+
+  if (image === undefined) {
+    return undefined;
+  }
+
+  if (image === "") {
+    return null;
+  }
+
+  if (!isDataImage(image) && !/^https?:\/\//i.test(image)) {
+    throw new ValidationError("Images must be selected from your device.");
+  }
+
+  return image;
+};
+
+const resolveStorefrontImageUpload = async (
+  value: unknown,
+  folder: string,
+  fileNamePrefix: string
+) => {
+  const image = normalizeImageValue(value);
+
+  if (image === undefined) {
+    return undefined;
+  }
+
+  if (image === null) {
+    return null;
+  }
+
+  if (isDataImage(image) && hasImageKitConfig()) {
+    const response = await storefrontImagekit.upload({
+      file: image,
+      fileName: `${fileNamePrefix}-${Date.now()}.jpg`,
+      folder,
+    });
+
+    return {
+      url: response.url,
+      fileId: response.fileId,
+    };
+  }
+
+  return {
+    url: image,
+    fileId: `${fileNamePrefix}-${Date.now()}`,
+  };
+};
+
+const resolveStorefrontImageUrl = async (
+  value: unknown,
+  folder: string,
+  fileNamePrefix: string
+) => {
+  const image = await resolveStorefrontImageUpload(value, folder, fileNamePrefix);
+
+  if (image === undefined) {
+    return undefined;
+  }
+
+  return image?.url || null;
+};
+
+const resolveGalleryImages = async (value: unknown, shopId: string) => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const images: string[] = [];
+
+  for (const [index, imageValue] of value.slice(0, 3).entries()) {
+    const image = await resolveStorefrontImageUrl(
+      imageValue,
+      "/storefront/gallery",
+      `shop-gallery-${shopId}-${index + 1}`
+    );
+
+    if (image) {
+      images.push(image);
+    }
+  }
+
+  return images;
+};
+
+const normalizeSocialLinks = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const link = item as Record<string, unknown>;
+      const label = normalizeText(link.label ?? link.type, 40);
+      const url = normalizeUrl(link.url);
+
+      if (!label || !url) {
+        return null;
+      }
+
+      return {
+        label,
+        url,
+      };
+    })
+    .filter(Boolean);
+};
+
+const getLatestImageUrl = (images: any[] | undefined, fallback: string) => {
+  if (!Array.isArray(images) || images.length === 0) {
+    return fallback;
+  }
+
+  return images[images.length - 1]?.url || fallback;
+};
+
+const formatStorefrontDate = (value: Date | string | undefined) => {
+  if (!value) {
+    return "N/A";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "N/A";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+};
+
+const serializeStorefrontProduct = (product: any) => {
+  const properties =
+    product?.custom_properties &&
+    typeof product.custom_properties === "object" &&
+    !Array.isArray(product.custom_properties)
+      ? product.custom_properties
+      : {};
+
+  return {
+    id: product.id,
+    title: product.title,
+    description: product.short_description || product.detailed_description || "",
+    image: getLatestImageUrl(product.images, ""),
+    price: Number(product.sale_price || product.regular_price || 0),
+    buttonLabel: properties.buttonLabel || "View Product",
+    buttonUrl: properties.buttonUrl || "",
+  };
+};
+
+const serializeSellerStorefront = (shop: any, products: any[] = []) => {
+  const storefront = getStorefrontConfig(shop);
+  const coverImage = shop.coverBanner || DEFAULT_STOREFRONT_IMAGES[0];
+  const galleryImages = Array.isArray(storefront.galleryImages)
+    ? storefront.galleryImages
+        .filter((image: unknown): image is string => typeof image === "string")
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  const coverTags = Array.isArray(storefront.tags)
+    ? storefront.tags
+        .filter((tag: unknown): tag is string => typeof tag === "string")
+        .filter(Boolean)
+        .slice(0, 8)
+    : DEFAULT_COVER_TAGS;
+  const buyNowPrice =
+    typeof storefront.buyNowPrice === "number" && Number.isFinite(storefront.buyNowPrice)
+      ? storefront.buyNowPrice
+      : DEFAULT_COVER_PRICE;
+
+  return {
+    cover: {
+      description:
+        typeof storefront.coverDescription === "string"
+          ? storefront.coverDescription
+          : shop.bio || "",
+      images: [
+        coverImage,
+        ...galleryImages,
+        ...DEFAULT_STOREFRONT_IMAGES.slice(1),
+      ].slice(0, 4),
+      tags: coverTags,
+      buyNowPrice,
+      buttonLabel:
+        typeof storefront.buttonLabel === "string" && storefront.buttonLabel.trim()
+          ? storefront.buttonLabel
+          : `Buy now $${buyNowPrice}`,
+      buttonUrl:
+        typeof storefront.buttonUrl === "string" ? storefront.buttonUrl : "",
+    },
+    shop: {
+      id: shop.id,
+      name: shop.name,
+      tagline: shop.bio || "",
+      avatar: getLatestImageUrl(shop.avatar, DEFAULT_AVATAR_URL),
+      rating: Number(shop.ratings || 0) > 0 ? Number(shop.ratings).toFixed(1) : "N/A",
+      followers: 0,
+      hours: shop.opening_hours || "",
+      address: shop.address || "",
+      joinedAt: formatStorefrontDate(shop.createdAt),
+      website: shop.website || "",
+      socialLinks: Array.isArray(shop.socialLinks) ? shop.socialLinks : [],
+    },
+    products: products.map(serializeStorefrontProduct),
+    reviews: Array.isArray(shop.reviews) ? shop.reviews : [],
+  };
 };
 
 // POST /register
@@ -730,5 +1106,639 @@ export const getSeller = async ( req: any, res: Response, next: NextFunction ) =
   } 
   catch (error) {
     next(error);
+  }
+};
+
+export const getSellerSettings = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shopId = seller.shop?.id || seller.shopId || null;
+
+    const settings = await prisma.seller_settings.upsert({
+      where: {
+        sellerId: seller.id,
+      },
+      update: {
+        shopId,
+      },
+      create: {
+        sellerId: seller.id,
+        shopId,
+        ...DEFAULT_SELLER_SETTINGS,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      settings: serializeSellerSettings(settings),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const updateSellerSettings = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shopId = seller.shop?.id || seller.shopId || null;
+    const updateData: any = {
+      shopId,
+    };
+
+    if (req.body?.lowStockAlertThreshold !== undefined) {
+      const threshold = Number(req.body.lowStockAlertThreshold);
+
+      if (!Number.isInteger(threshold) || threshold < 0 || threshold > 10000) {
+        return next(
+          new ValidationError(
+            "Low stock alert threshold must be an integer between 0 and 10000."
+          )
+        );
+      }
+
+      updateData.lowStockAlertThreshold = threshold;
+    }
+
+    const notificationPreferences = req.body?.notificationPreferences;
+
+    if (notificationPreferences && typeof notificationPreferences === "object") {
+      if ("email" in notificationPreferences) {
+        updateData.notifyEmail = getBooleanValue(notificationPreferences.email);
+      }
+
+      if ("web" in notificationPreferences) {
+        updateData.notifyWeb = getBooleanValue(notificationPreferences.web);
+      }
+
+      if ("app" in notificationPreferences) {
+        updateData.notifyApp = getBooleanValue(notificationPreferences.app);
+      }
+    }
+
+    const customDomains = normalizeCustomDomains(req.body?.customDomains);
+
+    if (customDomains) {
+      updateData.customDomains = customDomains;
+    }
+
+    const withdrawMethod = normalizeWithdrawMethod(req.body?.withdrawMethod);
+
+    if (withdrawMethod !== undefined) {
+      updateData.withdrawMethod = withdrawMethod;
+    }
+
+    const settings = await prisma.seller_settings.upsert({
+      where: {
+        sellerId: seller.id,
+      },
+      update: updateData,
+      create: {
+        sellerId: seller.id,
+        ...DEFAULT_SELLER_SETTINGS,
+        ...updateData,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      settings: serializeSellerSettings(settings),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const getSellerShopWithStorefrontRelations = async (sellerId: string) =>
+  prisma.shops.findUnique({
+    where: {
+      sellerId,
+    },
+    include: {
+      avatar: true,
+      reviews: true,
+    },
+  });
+
+const getOrCreateSellerStorefrontShop = async (seller: any) => {
+  const existingShop = await getSellerShopWithStorefrontRelations(seller.id);
+
+  if (existingShop) {
+    return existingShop;
+  }
+
+  if (seller.shop?.id) {
+    const relatedShop = await prisma.shops.findUnique({
+      where: {
+        id: seller.shop.id,
+      },
+      include: {
+        avatar: true,
+        reviews: true,
+      },
+    });
+
+    if (relatedShop) {
+      return relatedShop;
+    }
+  }
+
+  return prisma.shops.create({
+    data: {
+      name: normalizeText(seller.shop?.name ?? seller.name, 80) || "My Shop",
+      bio: normalizeText(seller.shop?.bio, 1000) || "",
+      category: normalizeText(seller.shop?.category, 80) || "Storefront",
+      address: normalizeText(seller.shop?.address, 160) || "",
+      opening_hours: normalizeText(seller.shop?.opening_hours, 120) || "",
+      website: seller.shop?.website || null,
+      socialLinks: Array.isArray(seller.shop?.socialLinks)
+        ? seller.shop.socialLinks
+        : [],
+      storefront: {},
+      sellerId: seller.id,
+    },
+    include: {
+      avatar: true,
+      reviews: true,
+    },
+  });
+};
+
+const getStorefrontProducts = async (shopId: string) =>
+  prisma.products.findMany({
+    where: {
+      shopId,
+      OR: [
+        { isDeleted: false },
+        { isDeleted: null },
+        { isDeleted: { isSet: false } },
+      ],
+    },
+    include: {
+      images: true,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+    take: 12,
+  });
+
+const createSlug = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .slice(0, 80) || `product-${Date.now()}`;
+
+const getUniqueProductSlug = async (title: string) => {
+  const baseSlug = createSlug(title);
+  let slug = baseSlug;
+  let index = 1;
+
+  while (await prisma.products.findUnique({ where: { slug } })) {
+    slug = `${baseSlug}-${index}`;
+    index += 1;
+  }
+
+  return slug;
+};
+
+const getProductPrice = (value: unknown) => {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const price = Number(value);
+
+  if (!Number.isFinite(price) || price < 0) {
+    throw new ValidationError("Product price must be a valid number.");
+  }
+
+  return price;
+};
+
+export const getSellerStorefront = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shop = await getOrCreateSellerStorefrontShop(seller);
+
+    const products = await getStorefrontProducts(shop.id);
+
+    return res.status(200).json({
+      success: true,
+      storefront: serializeSellerStorefront(shop, products),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const createSellerStorefrontProduct = async (
+  req: any,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shop = await getOrCreateSellerStorefrontShop(seller);
+
+    const title = normalizeText(req.body?.title, 120);
+    const description = normalizeText(req.body?.description, 1200) || "";
+    const price = getProductPrice(req.body?.price) ?? 0;
+    const buttonLabel =
+      normalizeText(req.body?.buttonLabel ?? req.body?.buttonText, 60) ||
+      "View Product";
+    const buttonUrl = normalizeActionLink(req.body?.buttonUrl) || "";
+
+    if (!title) {
+      return next(new ValidationError("Product title is required."));
+    }
+
+    const imageUpload = await resolveStorefrontImageUpload(
+      req.body?.imageFile ?? req.body?.image,
+      "/storefront/products",
+      `shop-product-${shop.id}`
+    );
+
+    if (!imageUpload?.url) {
+      return next(new ValidationError("Product image is required."));
+    }
+
+    await prisma.products.create({
+      data: {
+        title,
+        slug: await getUniqueProductSlug(title),
+        category: shop.category || "Storefront",
+        subCategory: "Storefront",
+        short_description: description,
+        detailed_description: description,
+        tags: "storefront",
+        brand: shop.name,
+        colors: "",
+        sizes: [],
+        stock: 1,
+        sale_price: price,
+        regular_price: price,
+        discount_codes: [],
+        shopId: shop.id,
+        custom_properties: {
+          storefrontCard: true,
+          buttonLabel,
+          buttonUrl,
+        },
+        images: {
+          create: [
+            {
+              file_id: imageUpload.fileId,
+              url: imageUpload.url,
+            },
+          ],
+        },
+      },
+    });
+
+    const updatedShop = await getSellerShopWithStorefrontRelations(seller.id);
+    const products = await getStorefrontProducts(shop.id);
+
+    return res.status(201).json({
+      success: true,
+      storefront: serializeSellerStorefront(updatedShop, products),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const updateSellerStorefrontProduct = async (
+  req: any,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shop = await getOrCreateSellerStorefrontShop(seller);
+    const productId =
+      typeof req.params.productId === "string" ? req.params.productId : "";
+
+    if (!/^[a-f\d]{24}$/i.test(productId)) {
+      return next(new ValidationError("Product not found!"));
+    }
+
+    const product = await prisma.products.findFirst({
+      where: {
+        id: productId,
+        shopId: shop.id,
+      },
+    });
+
+    if (!product) {
+      return next(new ValidationError("Product not found!"));
+    }
+
+    const updateData: any = {};
+
+    if ("title" in req.body) {
+      const title = normalizeText(req.body.title, 120);
+
+      if (!title) {
+        return next(new ValidationError("Product title is required."));
+      }
+
+      updateData.title = title;
+    }
+
+    if ("description" in req.body) {
+      const description = normalizeText(req.body.description, 1200) || "";
+      updateData.short_description = description;
+      updateData.detailed_description = description;
+    }
+
+    if ("price" in req.body) {
+      const price = getProductPrice(req.body.price);
+
+      if (price !== undefined) {
+        updateData.sale_price = price;
+        updateData.regular_price = price;
+      }
+    }
+
+    const properties =
+      product.custom_properties &&
+      typeof product.custom_properties === "object" &&
+      !Array.isArray(product.custom_properties)
+        ? { ...(product.custom_properties as Record<string, unknown>) }
+        : {};
+
+    if ("buttonLabel" in req.body || "buttonText" in req.body) {
+      properties.buttonLabel =
+        normalizeText(req.body.buttonLabel ?? req.body.buttonText, 60) ||
+        "View Product";
+    }
+
+    if ("buttonUrl" in req.body) {
+      properties.buttonUrl = normalizeActionLink(req.body.buttonUrl) || "";
+    }
+
+    updateData.custom_properties = {
+      ...properties,
+      storefrontCard: true,
+    };
+
+    await prisma.products.update({
+      where: {
+        id: product.id,
+      },
+      data: updateData,
+    });
+
+    const imageUpload =
+      "imageFile" in req.body || "image" in req.body
+        ? await resolveStorefrontImageUpload(
+            req.body.imageFile ?? req.body.image,
+            "/storefront/products",
+            `shop-product-${shop.id}`
+          )
+        : undefined;
+
+    if (imageUpload?.url) {
+      await prisma.images.deleteMany({
+        where: {
+          productId: product.id,
+        },
+      });
+
+      await prisma.images.create({
+        data: {
+          file_id: imageUpload.fileId,
+          url: imageUpload.url,
+          productId: product.id,
+        },
+      });
+    }
+
+    const updatedShop = await getSellerShopWithStorefrontRelations(seller.id);
+    const products = await getStorefrontProducts(shop.id);
+
+    return res.status(200).json({
+      success: true,
+      storefront: serializeSellerStorefront(updatedShop, products),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const updateSellerStorefront = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shop = await getOrCreateSellerStorefrontShop(seller);
+
+    const updateData: any = {};
+    const storefrontUpdate = { ...getStorefrontConfig(shop) };
+    let shouldUpdateStorefront = false;
+
+    if ("name" in req.body) {
+      const name = normalizeText(req.body.name, 80);
+
+      if (!name) {
+        return next(new ValidationError("Shop name is required."));
+      }
+
+      updateData.name = name;
+    }
+
+    if ("description" in req.body || "bio" in req.body) {
+      updateData.bio = normalizeText(req.body.description ?? req.body.bio, 1000) || "";
+    }
+
+    if ("address" in req.body) {
+      updateData.address = normalizeText(req.body.address, 160) || "";
+    }
+
+    if ("openingHours" in req.body || "opening_hours" in req.body) {
+      updateData.opening_hours =
+        normalizeText(req.body.openingHours ?? req.body.opening_hours, 120) || "";
+    }
+
+    if ("website" in req.body) {
+      updateData.website = normalizeUrl(req.body.website);
+    }
+
+    if (
+      "coverImageFile" in req.body ||
+      "coverImage" in req.body ||
+      "coverBanner" in req.body
+    ) {
+      const coverImage = await resolveStorefrontImageUrl(
+        req.body.coverImageFile ?? req.body.coverImage ?? req.body.coverBanner,
+        "/storefront/covers",
+        `shop-cover-${shop.id}`
+      );
+
+      if (coverImage !== undefined) {
+        updateData.coverBanner = coverImage;
+      }
+    }
+
+    if ("galleryImages" in req.body || "galleryImageFiles" in req.body) {
+      const galleryImages = await resolveGalleryImages(
+        req.body.galleryImages ?? req.body.galleryImageFiles,
+        shop.id
+      );
+
+      if (galleryImages !== undefined) {
+        storefrontUpdate.galleryImages = galleryImages;
+        shouldUpdateStorefront = true;
+      }
+    }
+
+    if ("coverDescription" in req.body) {
+      storefrontUpdate.coverDescription =
+        normalizeText(req.body.coverDescription, 1200) || "";
+      shouldUpdateStorefront = true;
+    }
+
+    if ("tags" in req.body) {
+      storefrontUpdate.tags = normalizeStringArray(req.body.tags, 8, 40) || [];
+      shouldUpdateStorefront = true;
+    }
+
+    if ("buttonLabel" in req.body || "buttonText" in req.body) {
+      storefrontUpdate.buttonLabel =
+        normalizeText(req.body.buttonLabel ?? req.body.buttonText, 60) || "";
+      shouldUpdateStorefront = true;
+    }
+
+    if ("buttonUrl" in req.body) {
+      storefrontUpdate.buttonUrl = normalizeActionLink(req.body.buttonUrl) || "";
+      shouldUpdateStorefront = true;
+    }
+
+    if ("buyNowPrice" in req.body) {
+      const price = Number(req.body.buyNowPrice);
+
+      if (!Number.isFinite(price) || price < 0) {
+        return next(new ValidationError("Button price must be a valid number."));
+      }
+
+      storefrontUpdate.buyNowPrice = price;
+      shouldUpdateStorefront = true;
+    }
+
+    const socialLinks = normalizeSocialLinks(req.body?.socialLinks);
+
+    if (socialLinks !== undefined) {
+      updateData.socialLinks = socialLinks as any;
+    }
+
+    const avatarUpload =
+      "avatarImageFile" in req.body || "avatarImage" in req.body
+        ? await resolveStorefrontImageUpload(
+            req.body.avatarImageFile ?? req.body.avatarImage,
+            "/storefront/avatars",
+            `shop-avatar-${shop.id}`
+          )
+        : undefined;
+    const avatarUrl =
+      avatarUpload !== undefined
+        ? avatarUpload?.url || null
+        : "avatarUrl" in req.body || "avatar" in req.body
+          ? normalizeUrl(req.body.avatarUrl ?? req.body.avatar)
+          : undefined;
+
+    if (avatarUrl !== undefined) {
+      await prisma.images.deleteMany({
+        where: {
+          shopId: shop.id,
+        },
+      });
+
+      if (avatarUrl) {
+        await prisma.images.create({
+          data: {
+            file_id:
+              avatarUpload && "fileId" in avatarUpload
+                ? avatarUpload.fileId
+                : `shop-avatar-${shop.id}-${Date.now()}`,
+            url: avatarUrl,
+            shopId: shop.id,
+          },
+        });
+      }
+    }
+
+    if (shouldUpdateStorefront) {
+      updateData.storefront = storefrontUpdate;
+    }
+
+    const updatedShop =
+      Object.keys(updateData).length > 0
+        ? await prisma.shops.update({
+            where: {
+              id: shop.id,
+            },
+            data: updateData,
+            include: {
+              avatar: true,
+              reviews: true,
+            },
+          })
+        : await getSellerShopWithStorefrontRelations(seller.id);
+
+    const products = await getStorefrontProducts(shop.id);
+
+    return res.status(200).json({
+      success: true,
+      storefront: serializeSellerStorefront(updatedShop, products),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const deleteSellerShop = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = getAuthenticatedSeller(req);
+    const shop = await prisma.shops.findUnique({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    if (!shop) {
+      return next(new ValidationError("Shop not found!"));
+    }
+
+    if (req.body?.confirmName !== shop.name && req.body?.confirm !== "DELETE") {
+      return next(new ValidationError("Shop deletion confirmation is required!"));
+    }
+
+    await prisma.products.updateMany({
+      where: {
+        shopId: shop.id,
+      },
+      data: {
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
+    });
+
+    await prisma.seller_settings.deleteMany({
+      where: {
+        sellerId: seller.id,
+      },
+    });
+
+    await prisma.shops.delete({
+      where: {
+        id: shop.id,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+    });
+  } catch (error) {
+    return next(error);
   }
 };

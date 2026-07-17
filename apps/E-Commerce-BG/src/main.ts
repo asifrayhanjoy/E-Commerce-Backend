@@ -12,13 +12,14 @@ import cookieParser from "cookie-parser";
 import { errorMiddleware } from "./packages/error-handler";
 import authRouter from "./routes/auth.route";
 import initializeConfig from "./libs/initializeConfig";
+import { getAdminDashboard, getAdminSeller, getAdminSellers } from "./controler/auth.controler";
 
 const app = express();
 app.set('trust proxy', 1);
 
 app.use(
   cors({
-    origin: ["http://localhost:6001", "http://localhost:3000"],
+    origin: ["http://localhost:6001", "http://localhost:6003", "http://localhost:3000"],
     allowedHeaders: ["Authorization", "Content-Type"],
     credentials: true,
   })
@@ -52,6 +53,8 @@ app.get('/gateway-health', (_req, res) => {
 
 const productServiceUrl =
   process.env.PRODUCT_SERVICE_URL || "http://127.0.0.1:8181";
+const orderServiceUrl =
+  process.env.ORDER_SERVICE_URL || "http://127.0.0.1:8282";
 
 app.use(
   "/api/v1/products",
@@ -72,8 +75,31 @@ app.use(
   })
 );
 
+app.use(
+  "/api/v1/admin/orders",
+  proxy(orderServiceUrl, {
+    proxyReqPathResolver: (req) =>
+      req.originalUrl.replace(/^\/api\/v1\/admin\/orders/, "/api/admin/orders"),
+    proxyErrorHandler: (err, res, next) => {
+      console.error("Order service proxy error:", err);
+
+      if (res.headersSent) {
+        return next(err);
+      }
+
+      return res.status(502).json({
+        status: "error",
+        message: "Order service is unavailable",
+      });
+    },
+  })
+);
+
 app.use(express.json())
 app.use(cookieParser())
+app.get("/api/v1/admin/dashboard", getAdminDashboard);
+app.get("/api/v1/admin/sellers", getAdminSellers);
+app.get("/api/v1/admin/sellers/:sellerId", getAdminSeller);
 app.use("/api/v1/auth", authRouter);
 
 app.use(errorMiddleware);

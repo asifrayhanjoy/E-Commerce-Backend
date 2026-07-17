@@ -14,8 +14,12 @@ export const errorMiddleware = (
   _next: NextFunction
 ) => {
   console.error("Order service error:", err);
+  const status =
+    typeof (err as { status?: unknown }).status === "number"
+      ? (err as { status: number }).status
+      : 500;
 
-  return res.status(500).json({
+  return res.status(status).json({
     status: "error",
     message:
       process.env.NODE_ENV !== "production"

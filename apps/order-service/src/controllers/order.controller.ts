@@ -12,6 +12,7 @@ class ValidationError extends Error {
   }
 }
 import Stripe from "stripe";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
@@ -91,6 +92,17 @@ const getOrderPaymentTotal = (order: { totalAmount?: number | null }) => {
   return Number.isFinite(totalAmount) ? totalAmount : 0;
 };
 
+const getCartItemCount = (cart: unknown) => {
+  if (!Array.isArray(cart)) {
+    return 0;
+  }
+
+  return cart.reduce((total, item: any) => {
+    const quantity = Number(item?.quantity || 0);
+    return total + (Number.isFinite(quantity) ? quantity : 0);
+  }, 0);
+};
+
 const mapOrderToSellerPayment = (order: any) => {
   const totalAmount = getOrderPaymentTotal(order);
 
@@ -109,6 +121,52 @@ const mapOrderToSellerPayment = (order: any) => {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
+};
+
+const formatAdminOrderId = (id: string) =>
+  `#${String(id || "").slice(-6).toUpperCase()}`;
+
+const formatAdminOrderDate = (value: Date | string) => {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    date.getFullYear(),
+  ].join("/");
+};
+
+const mapOrderToAdminOrder = (order: any) => ({
+  id: order.id,
+  orderId: formatAdminOrderId(order.id),
+  shop: order.shop?.name || "Unknown shop",
+  buyer: order.user?.name || order.user?.email || "Unknown buyer",
+  total: `$${getOrderPaymentTotal(order).toFixed(2)}`,
+  status: order.paymentStatus || "Pending",
+  date: formatAdminOrderDate(order.createdAt),
+});
+
+const matchesAdminOrderSearch = (order: ReturnType<typeof mapOrderToAdminOrder>, search: string) => {
+  if (!search) {
+    return true;
+  }
+
+  const searchableText = [
+    order.orderId,
+    order.shop,
+    order.buyer,
+    order.total,
+    order.status,
+    order.date,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return searchableText.includes(search.toLowerCase());
 };
 
 const parseStoredSession = <T>(value: unknown): T => {
@@ -563,6 +621,107 @@ export const createOrder = async (req: Request, res: Response, next: NextFunctio
   }
 };
 
+// get logged-in user's orders
+export const getUserOrders = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    if (req.role !== "user" || !req.user?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only users can view their orders.",
+      });
+    }
+
+    const orders = await prisma.orders.findMany({
+      where: {
+        userId: req.user.id,
+      },
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            category: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    const ordersWithAddress = await Promise.all(
+      orders.map(async (order) => {
+        const shippingAddress = await getOrderShippingAddress(order);
+
+        return {
+          ...order,
+          cart: Array.isArray(order.cart) ? order.cart : [],
+          itemCount: getCartItemCount(order.cart),
+          paymentStatus: order.paymentStatus || "Paid",
+          deliveryStatus: order.deliveryStatus || "Ordered",
+          shippingAddress,
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      stats: {
+        totalOrders: ordersWithAddress.length,
+        processingOrders: ordersWithAddress.filter(
+          (order) => order.deliveryStatus !== "Delivered"
+        ).length,
+        completedOrders: ordersWithAddress.filter(
+          (order) => order.deliveryStatus === "Delivered"
+        ).length,
+      },
+      orders: ordersWithAddress,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getAdminOrders = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const orders = await prisma.orders.findMany({
+      take: 100,
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+    const adminOrders = orders
+      .map(mapOrderToAdminOrder)
+      .filter((order) => matchesAdminOrderSearch(order, search));
+
+    return res.status(200).json({
+      success: true,
+      orders: adminOrders,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 // get sellers orders
 export const getSellerOrders = async ( req: any, res: Response, next: NextFunction ) => {
   try {
@@ -848,6 +1007,134 @@ export const updateSellerOrderDeliveryStatus = async ( req: any, res: Response, 
         deliveryStatus: order.deliveryStatus || "Ordered",
         shippingAddress,
       },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// verify coupon code
+export const verifyCouponCode = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const { couponCode, cart } = req.body;
+
+    if (!couponCode || !cart || cart.length === 0) {
+      return next(
+        new ValidationError("Coupon code and cart are required!")
+      );
+    }
+
+    // Fetch the discount code
+    const discount = await prisma.discount_codes.findUnique({
+      where: {
+        discountCode: couponCode,
+      },
+    });
+
+    if (!discount) {
+      return next(new ValidationError("Coupon code isn't valid!"));
+    }
+
+    // Find matching product that includes this discount code
+    const matchingProduct = cart.find(
+      (item: any) =>
+        item.discount_codes?.some((d: any) => d === discount.id)
+    );
+
+    if (!matchingProduct) {
+      return res.status(200).json({
+        valid: false,
+        discount: 0,
+        discountAmount: 0,
+        message: "No matching product found in cart for this coupon",
+      });
+    }
+
+    let discountAmount = 0;
+    const price =
+      matchingProduct.sale_price * matchingProduct.quantity;
+
+    if (discount.discountType === "percentage") {
+      discountAmount =
+        (price * discount.discountValue) / 100;
+    } else if (discount.discountType === "flat") {
+      discountAmount = discount.discountValue;
+    }
+
+    // Prevent discount from being greater than total price
+    discountAmount = Math.min(discountAmount, price);
+
+    res.status(200).json({
+      valid: true,
+      discount: discount.discountValue,
+      discountAmount: discountAmount.toFixed(2),
+      discountedProductId: matchingProduct.id,
+      discountType: discount.discountType,
+      message: "Discount applied to 1 eligible product",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const changeUserPassword = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const userId = (req as any).user?.id;
+
+    if (!userId) {
+      return next(new ValidationError("User not authenticated."));
+    }
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return next(
+        new ValidationError("Current password and new password are required!")
+      );
+    }
+
+    if (String(newPassword).length < 6) {
+      return next(
+        new ValidationError("New password must be at least 6 characters long!")
+      );
+    }
+
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user?.password) {
+      return next(new ValidationError("User account was not found!"));
+    }
+
+    const isCurrentPasswordValid = await bcrypt.compare(
+      currentPassword,
+      user.password
+    );
+
+    if (!isCurrentPasswordValid) {
+      return next(new ValidationError("Current password is incorrect!"));
+    }
+
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+
+    if (isSamePassword) {
+      return next(
+        new ValidationError(
+          "New password cannot be the same as the current password!"
+        )
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await prisma.users.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password changed successfully!",
     });
   } catch (error) {
     return next(error);

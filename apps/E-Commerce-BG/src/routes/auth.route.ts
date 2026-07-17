@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { createSellerStorefrontProduct, createShop, createStripeConnectLink, createUserAddress, deleteSellerShop, deleteUserAddress, getSeller, getSellerSettings, getSellerStorefront, getUser, getUserAddresses, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateSellerSettings, updateSellerStorefront, updateSellerStorefrontProduct, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
+import { createSellerStorefrontProduct, createShop, createStripeConnectLink, createUserAddress, deleteSellerShop, deleteUserAddress, getAdminDashboard, getAdminSeller, getAdminSellers, getSeller, getSellerSettings, getSellerStorefront, getUser, getUserAddresses, loginAdmin, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateSellerSettings, updateSellerStorefront, updateSellerStorefrontProduct, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
 import { verifyForgotPasswordOtp } from "../utils/auth.helper";
 import isAuthenticated from "../utils/middleware/isAuthenticated";
 import { isSeller } from "../utils/middleware/AuthorizeRole";
 
 const router = Router();
 
-                  // {userx}
+                  // {user}
 router.post("/register", userRegistration);
 router.post("/verify-otp", verifyUser);
 router.post("/login", loginUser);
@@ -33,7 +33,11 @@ router.put("/seller-storefront", isAuthenticated,isSeller, updateSellerStorefron
 router.post("/seller-storefront/products", isAuthenticated,isSeller, createSellerStorefrontProduct);
 router.put("/seller-storefront/products/:productId", isAuthenticated,isSeller, updateSellerStorefrontProduct);
 router.delete("/seller-shop", isAuthenticated,isSeller, deleteSellerShop);
-
+                  // {Admin}
+router.post("/login-admin", loginAdmin);
+router.get("/admin/dashboard", getAdminDashboard);
+router.get("/admin/sellers", getAdminSellers);
+router.get("/admin/sellers/:sellerId", getAdminSeller);
 
 
 export default router;

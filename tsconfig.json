@@ -20,6 +20,9 @@
     },
     {
       "path": "./apps/order-service"
+    },
+    {
+      "path": "./apps/admin-service"
     }
   ]
 }

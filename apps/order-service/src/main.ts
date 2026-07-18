@@ -14,8 +14,13 @@ const app = express();
 
 app.use(
   cors({
-    origin: ["http://localhost:3000"],
-    allowedHeaders: ["Authorization", "Content-Type"],
+    origin: [
+      "http://localhost:6001",
+      "http://localhost:6002",
+      "http://localhost:6003",
+      "http://localhost:3000",
+    ],
+    allowedHeaders: ["Authorization", "Content-Type", "x-auth-role"],
     credentials: true,
   })
 );

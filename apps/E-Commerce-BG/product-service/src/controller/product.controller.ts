@@ -221,6 +221,66 @@ const getQueryNumber = (value: unknown) => {
   return rawValue && Number.isFinite(parsedValue) ? parsedValue : undefined;
 };
 
+const getOptionalDate = (value: unknown) => {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const normalizeSlugValue = (value: unknown) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
+
+const getUniqueProductSlug = async (requestedSlug: unknown, title: unknown) => {
+  const baseSlug =
+    normalizeSlugValue(requestedSlug) ||
+    normalizeSlugValue(title) ||
+    `product-${Date.now()}`;
+
+  const existingProduct = await prisma.products.findUnique({
+    where: {
+      slug: baseSlug,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!existingProduct) {
+    return baseSlug;
+  }
+
+  for (let index = 2; index <= 50; index += 1) {
+    const slug = `${baseSlug}-${index}`;
+    const existingProductWithSuffix = await prisma.products.findUnique({
+      where: {
+        slug,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existingProductWithSuffix) {
+      return slug;
+    }
+  }
+
+  return `${baseSlug}-${Date.now()}`;
+};
+
 const getPriceRangeValues = (value: unknown): number[] => {
   if (Array.isArray(value)) {
     return value.flatMap(getPriceRangeValues);
@@ -283,10 +343,152 @@ const getFilteredProductOrderBy = (
   }
 };
 
+const publicProductShopInclude = {
+  avatar: true,
+  sellers: true,
+} satisfies Prisma.shopsInclude;
+
 const publicProductInclude = {
   images: true,
-  Shop: true,
+  Shop: {
+    include: publicProductShopInclude,
+  },
 } satisfies Prisma.productsInclude;
+
+const publicHomeProductInclude = {
+  images: true,
+} satisfies Prisma.productsInclude;
+
+const getImageUrl = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    for (const image of value) {
+      const url = getImageUrl(image);
+
+      if (url) {
+        return url;
+      }
+    }
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return getImageUrl(
+      record.url ??
+        record.secure_url ??
+        record.secureUrl ??
+        record.src ??
+        record.image ??
+        record.imageUrl ??
+        record.avatar ??
+        record.avatarUrl ??
+        record.profilePhoto ??
+        record.profilePhotoUrl ??
+        record.profileImage ??
+        record.profileImageUrl ??
+        record.coverPhoto ??
+        record.coverPhotoUrl ??
+        record.coverBanner ??
+        record.coverBannerUrl
+    );
+  }
+
+  return "";
+};
+
+const withPublicShopImages = (shop: any) => {
+  if (!shop) {
+    return shop;
+  }
+
+  const storefront =
+    shop.storefront && typeof shop.storefront === "object"
+      ? shop.storefront
+      : {};
+  const avatarUrl =
+    getImageUrl(shop.avatar) ||
+    getImageUrl(shop.avatarUrl) ||
+    getImageUrl(shop.profilePhoto) ||
+    getImageUrl(shop.profilePhotoUrl) ||
+    getImageUrl(storefront.avatarImage) ||
+    getImageUrl(shop.sellers?.avatar);
+  const coverBannerUrl =
+    getImageUrl(shop.coverBanner) ||
+    getImageUrl(shop.coverBannerUrl) ||
+    getImageUrl(shop.coverPhoto) ||
+    getImageUrl(shop.coverPhotoUrl) ||
+    getImageUrl(storefront.coverImage) ||
+    getImageUrl(storefront.cover?.images);
+
+  return {
+    ...shop,
+    avatarUrl,
+    profilePhoto: avatarUrl,
+    profilePhotoUrl: avatarUrl,
+    coverBannerUrl,
+    coverPhoto: coverBannerUrl,
+    coverPhotoUrl: coverBannerUrl,
+  };
+};
+
+const withPublicProductShopImages = (product: any) => ({
+  ...product,
+  Shop: product?.Shop ? withPublicShopImages(product.Shop) : product?.Shop,
+  shop: product?.shop ? withPublicShopImages(product.shop) : product?.shop,
+});
+
+const formatPublicEventDate = (value: unknown) => {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value as string | Date);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+};
+
+const formatPublicEventCurrency = (value: unknown) => {
+  const amount = Number(value || 0);
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(amount) ? amount : 0);
+};
+
+const withPublicEventFields = (product: any) => {
+  const normalizedProduct = withPublicProductShopImages(product);
+  const shop = normalizedProduct.Shop || normalizedProduct.shop;
+  const image = getImageUrl(normalizedProduct.images) || normalizedProduct.image || "";
+
+  return {
+    ...normalizedProduct,
+    image,
+    price: formatPublicEventCurrency(
+      normalizedProduct.sale_price ?? normalizedProduct.price
+    ),
+    start: formatPublicEventDate(normalizedProduct.starting_date),
+    end: formatPublicEventDate(normalizedProduct.ending_date),
+    shopName: shop?.name || "Unknown",
+    isEvent: true,
+  };
+};
+
+const isEventProduct = (product: any) =>
+  Boolean(product?.starting_date || product?.ending_date);
 
 const getHomeProductLimit = (value: unknown) =>
   Math.min(Math.max(1, getQueryNumber(value) || 10), 20);
@@ -326,7 +528,7 @@ const getTopOffers = async (
         },
       ],
     },
-    include: publicProductInclude,
+    include: publicHomeProductInclude,
     orderBy: [
       {
         ratings: "desc",
@@ -394,17 +596,32 @@ const getTopHomeShops = async (limit: number) => {
   });
 
   return Promise.all(
-    shops.map(async (shop) => ({
-      ...shop,
-      followersCount: await prisma.users.count({
-        where: {
-          following: {
-            has: shop.id,
+    shops.map(async (shop) =>
+      withPublicShopImages({
+        ...shop,
+        followersCount: await prisma.users.count({
+          where: {
+            following: {
+              has: shop.id,
+            },
           },
-        },
-      }),
-    }))
+        }),
+      })
+    )
   );
+};
+
+const getSafeHomeSection = async <T>(
+  section: string,
+  loader: () => Promise<T>,
+  fallback: T
+) => {
+  try {
+    return await loader();
+  } catch (error) {
+    console.error(`Failed to load home ${section}:`, error);
+    return fallback;
+  }
 };
 
 export const getCategories = async ( _req: Request, res: Response, next: NextFunction ) => {
@@ -589,6 +806,8 @@ export const createProduct = async (req: any, res: Response, next: NextFunction 
       stock,
       sale_price,
       regular_price,
+      starting_date,
+      ending_date,
       subCategory,
       customProperties = {},
       images = [],
@@ -628,17 +847,10 @@ export const createProduct = async (req: any, res: Response, next: NextFunction 
       return next(new ValidationError("Seller shop not found"));
     }
 
-    const slugChecking = await prisma.products.findUnique({
-      where: {
-        slug,
-      },
-    });
+    const uniqueSlug = await getUniqueProductSlug(slug, title);
 
-    if (slugChecking) {
-      return next(
-        new ValidationError("Slug already exist! Please use a different slug!")
-      );
-    }
+    const startingDate = getOptionalDate(starting_date);
+    const endingDate = getOptionalDate(ending_date);
 
     const newProduct = await prisma.products.create({
       data: {
@@ -646,7 +858,7 @@ export const createProduct = async (req: any, res: Response, next: NextFunction 
         short_description,
         detailed_description,
         warranty,
-        slug,
+        slug: uniqueSlug,
         tags: Array.isArray(tags) ? tags.join(",") : tags,
         cashOnDelivery: cash_on_delivery,
         brand,
@@ -659,6 +871,8 @@ export const createProduct = async (req: any, res: Response, next: NextFunction 
         stock: parseInt(stock, 10),
         sale_price: parseFloat(sale_price),
         regular_price: parseFloat(regular_price),
+        starting_date: startingDate,
+        ending_date: endingDate,
         custom_properties: customProperties || {},
         custom_specifications: custom_specifications || {},
         shopId,
@@ -683,6 +897,15 @@ export const createProduct = async (req: any, res: Response, next: NextFunction 
   }
 };
 
+// create event controller
+export const createEvent = async (req: any, res: Response, next: NextFunction) => {
+  if (!req.body?.starting_date || !req.body?.ending_date) {
+    return next(new ValidationError("Event start and end dates are required"));
+  }
+
+  return createProduct(req, res, next);
+};
+
 // get logged in seller products
 export const getShopProducts = async ( req: any, res: Response, next: NextFunction ) => {
   try {
@@ -700,11 +923,48 @@ export const getShopProducts = async ( req: any, res: Response, next: NextFuncti
       include: {
         images: true,
       },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
     res.status(201).json({
       success: true,
       products,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// get logged in seller events
+export const getShopEvents = async ( req: any, res: Response, next: NextFunction ) => {
+  try {
+    const seller = req.seller ?? (req.role === "seller" ? req.user : undefined);
+    const shopId = seller?.shop?.id;
+
+    if (!shopId) {
+      return next(new AuthError("Seller shop not found"));
+    }
+
+    const products = await prisma.products.findMany({
+      where: {
+        shopId,
+      },
+      include: {
+        images: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+    const events = products.filter(
+      (product) => isEventProduct(product) && !product.isDeleted
+    );
+
+    res.status(200).json({
+      success: true,
+      events,
     });
   } catch (error) {
     next(error);
@@ -881,10 +1141,7 @@ export const getAllProducts = async ( req: Request, res: Response, next: NextFun
       prisma.products.findMany({
         skip,
         take: limit,
-        include: {
-          images: true,
-          Shop: true,
-        },
+        include: publicProductInclude,
         where: baseFilter,
         orderBy,
       }),
@@ -896,17 +1153,90 @@ export const getAllProducts = async ( req: Request, res: Response, next: NextFun
       prisma.products.findMany({
         take: 10,
         where: baseFilter,
+        include: publicProductInclude,
         orderBy,
       }),
     ]);
 
     res.status(200).json({
-      products,
+      products: products.map(withPublicProductShopImages),
       top10By: type === "latest" ? "latest" : "topSales",
-      top10Products,
+      top10Products: top10Products.map(withPublicProductShopImages),
       total,
       currentPage: page,
       totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// get public events
+export const getPublicEvents = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    const page = Math.max(1, getQueryNumber(req.query.page) || 1);
+    const limit = Math.min(
+      Math.max(1, getQueryNumber(req.query.limit) || 20),
+      100
+    );
+    const skip = (page - 1) * limit;
+    const search =
+      getFirstQueryValue(req.query.search) ||
+      getFirstQueryValue(req.query.searchQuery) ||
+      getFirstQueryValue(req.query.q) ||
+      getFirstQueryValue(req.query.title);
+    const filters: Prisma.productsWhereInput[] = [
+      {
+        OR: [
+          { isDeleted: false },
+          { isDeleted: null },
+          { isDeleted: { isSet: false } },
+        ],
+      },
+    ];
+
+    if (search) {
+      filters.push({
+        OR: [
+          { title: { contains: search, mode: "insensitive" } },
+          { short_description: { contains: search, mode: "insensitive" } },
+          { detailed_description: { contains: search, mode: "insensitive" } },
+          { tags: { contains: search, mode: "insensitive" } },
+          { brand: { contains: search, mode: "insensitive" } },
+          { category: { contains: search, mode: "insensitive" } },
+          { subCategory: { contains: search, mode: "insensitive" } },
+        ],
+      });
+    }
+
+    const where: Prisma.productsWhereInput = {
+      AND: filters,
+    };
+
+    const products = await prisma.products.findMany({
+      where,
+      include: publicProductInclude,
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+    const events = products.filter(isEventProduct);
+    const total = events.length;
+    const paginatedEvents = events.slice(skip, skip + limit);
+
+    res.status(200).json({
+      success: true,
+      events: paginatedEvents.map(withPublicEventFields),
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalEvents: total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (error) {
     next(error);
@@ -923,37 +1253,47 @@ export const getHomeProducts = async ( req: Request, res: Response, next: NextFu
 
     const [suggestedProducts, latestProducts, topShops, topOffers] =
       await Promise.all([
-        prisma.products.findMany({
-          take: limit,
-          where,
-          include: publicProductInclude,
-          orderBy: [
-            {
-              ratings: "desc",
-            },
-            {
-              createdAt: "desc",
-            },
-          ],
-        }),
-        prisma.products.findMany({
-          take: limit,
-          where,
-          include: publicProductInclude,
-          orderBy: {
-            createdAt: "desc",
-          },
-        }),
-        getTopHomeShops(limit),
-        getTopOffers(where, limit),
+        getSafeHomeSection(
+          "suggested products",
+          () =>
+            prisma.products.findMany({
+              take: limit,
+              where,
+              include: publicHomeProductInclude,
+              orderBy: [
+                {
+                  ratings: "desc",
+                },
+                {
+                  createdAt: "desc",
+                },
+              ],
+            }),
+          []
+        ),
+        getSafeHomeSection(
+          "latest products",
+          () =>
+            prisma.products.findMany({
+              take: limit,
+              where,
+              include: publicHomeProductInclude,
+              orderBy: {
+                createdAt: "desc",
+              },
+            }),
+          []
+        ),
+        getSafeHomeSection("top shops", () => getTopHomeShops(limit), []),
+        getSafeHomeSection("top offers", () => getTopOffers(where, limit), []),
       ]);
 
     return res.status(200).json({
       success: true,
-      suggestedProducts,
-      latestProducts,
+      suggestedProducts: suggestedProducts.map(withPublicProductShopImages),
+      latestProducts: latestProducts.map(withPublicProductShopImages),
       topShops,
-      topOffers,
+      topOffers: topOffers.map(withPublicProductShopImages),
     });
   } catch (error) {
     return next(error);
@@ -1091,7 +1431,9 @@ export const getFilteredProducts = async ( req: Request, res: Response, next: Ne
         where,
         include: {
           images: true,
-          Shop: true,
+          Shop: {
+            include: publicProductShopInclude,
+          },
         },
         orderBy: getFilteredProductOrderBy(
           req.query.sortBy || req.query.sort || req.query.type
@@ -1104,7 +1446,7 @@ export const getFilteredProducts = async ( req: Request, res: Response, next: Ne
 
     res.status(200).json({
       success: true,
-      products,
+      products: products.map(withPublicProductShopImages),
       total,
       currentPage: page,
       totalPages: Math.ceil(total / limit),
@@ -1197,7 +1539,7 @@ export const getFilteredShops = async ( req: Request, res: Response, next: NextF
 
     res.status(200).json({
       success: true,
-      shops,
+      shops: shops.map(withPublicShopImages),
       total,
       currentPage: page,
       totalPages: Math.ceil(total / limit),
@@ -1239,7 +1581,9 @@ export const searchProducts = async ( req: Request, res: Response, next: NextFun
       },
       include: {
         images: true,
-        Shop: true,
+        Shop: {
+          include: publicProductShopInclude,
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -1248,7 +1592,7 @@ export const searchProducts = async ( req: Request, res: Response, next: NextFun
 
     res.status(200).json({
       success: true,
-      products,
+      products: products.map(withPublicProductShopImages),
     });
   } catch (error) {
     next(error);
@@ -1286,6 +1630,8 @@ export const getProductDetails = async ( req: Request, res: Response, next: Next
         images: true,
         Shop: {
           include: {
+            avatar: true,
+            sellers: true,
             reviews: {
               orderBy: {
                 createdAt: "desc",
@@ -1318,7 +1664,7 @@ export const getProductDetails = async ( req: Request, res: Response, next: Next
     return res.status(200).json({
       success: true,
       product: {
-        ...product,
+        ...withPublicProductShopImages(product),
         reviews,
       },
     });
@@ -1592,9 +1938,11 @@ export const topShops = async ( req: Request, res: Response, next: NextFunction 
         name: true,
         avatar: true,
         coverBanner: true,
+        storefront: true,
         address: true,
         ratings: true,
         category: true,
+        sellers: true,
         _count: {
           select: {
             products: true,
@@ -1604,7 +1952,7 @@ export const topShops = async ( req: Request, res: Response, next: NextFunction 
       },
     });
 
-    return res.status(200).json({ shops });
+    return res.status(200).json({ shops: shops.map(withPublicShopImages) });
   } catch (error) {
     console.error("Error fetching top shops:", error);
     return next(error);

@@ -23,12 +23,46 @@ type AdminAccount = {
   name?: string | null;
   email: string;
   password?: string | null;
+  createdAt?: Date | string | null;
 };
 
 type AdminCredential = {
   name: string;
   email: string;
   password: string;
+};
+
+type NotificationAccount = {
+  id: string;
+  title: string;
+  message: string;
+  creatorId: string;
+  receiverId: string;
+  redirect_link?: string | null;
+  createdAt?: Date | string | null;
+};
+
+type SiteConfigAccount = {
+  id?: string;
+  _id?: unknown;
+  categories?: string[];
+  subCategories?: Record<string, string[]>;
+  logoUrl?: string | null;
+  bannerUrl?: string | null;
+  logo?: string | null;
+  siteLogo?: string | null;
+  profilePhoto?: string | null;
+  profilePhotoUrl?: string | null;
+  avatar?: string | null;
+  avatarUrl?: string | null;
+  banner?: string | null;
+  siteBanner?: string | null;
+  coverPhoto?: string | null;
+  coverPhotoUrl?: string | null;
+  coverBanner?: string | null;
+  coverBannerUrl?: string | null;
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
 };
 
 const DEFAULT_ADMIN_CREDENTIALS: AdminCredential[] = [
@@ -56,6 +90,7 @@ const getAdminModel = () =>
         findUnique: (args: {
           where: { email: string };
         }) => Promise<AdminAccount | null>;
+        findMany: (args?: any) => Promise<AdminAccount[]>;
         update: (args: {
           where: { email: string };
           data: { name: string; password: string };
@@ -63,6 +98,22 @@ const getAdminModel = () =>
         create: (args: {
           data: { name: string; email: string; password: string };
         }) => Promise<AdminAccount>;
+      }
+    | undefined;
+
+const getNotificationModel = () =>
+  (prisma as any).notifications as
+    | {
+        findMany: (args?: any) => Promise<NotificationAccount[]>;
+        create: (args: {
+          data: {
+            title: string;
+            message: string;
+            creatorId: string;
+            receiverId: string;
+            redirect_link?: string | null;
+          };
+        }) => Promise<NotificationAccount>;
       }
     | undefined;
 
@@ -124,6 +175,735 @@ const getAdminAccount = async (email: string, password: string) => {
   return null;
 };
 
+const adminEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const normalizeAdminEmail = (value: unknown) =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
+const mapGatewayAdminAccount = (admin: AdminAccount) => ({
+  id: admin.id || "",
+  name: admin.name || "Admin",
+  email: admin.email || "",
+  role: "admin",
+});
+
+const getAdminAccountSearchText = (
+  admin: ReturnType<typeof mapGatewayAdminAccount>
+) => [admin.name, admin.email, admin.role].join(" ").toLowerCase();
+
+export const getAdminManagement = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const adminModel = getAdminModel();
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 200);
+
+    if (!adminModel?.findMany) {
+      return res.status(200).json({
+        status: "success",
+        admins: [],
+        pagination: {
+          page,
+          limit,
+          totalAdmins: 0,
+          totalPages: 1,
+        },
+      });
+    }
+
+    const admins = (
+      await adminModel.findMany({
+        orderBy: {
+          createdAt: "desc",
+        },
+      })
+    )
+      .map(mapGatewayAdminAccount)
+      .filter((admin) =>
+        search
+          ? getAdminAccountSearchText(admin).includes(search.toLowerCase())
+          : true
+      );
+    const totalAdmins = admins.length;
+    const totalPages = Math.max(Math.ceil(totalAdmins / limit), 1);
+    const currentPage = Math.min(page, totalPages);
+    const startIndex = (currentPage - 1) * limit;
+
+    return res.status(200).json({
+      status: "success",
+      admins: admins.slice(startIndex, startIndex + limit),
+      pagination: {
+        page: currentPage,
+        limit,
+        totalAdmins,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const createAdminAccount = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const email = normalizeAdminEmail(req.body?.email);
+    const password =
+      typeof req.body?.password === "string" ? req.body.password : "";
+
+    if (!email || !password) {
+      return next(new ValidationError("Admin Gmail and password are required."));
+    }
+
+    if (!adminEmailRegex.test(email)) {
+      return next(new ValidationError("Enter a valid admin Gmail."));
+    }
+
+    const adminModel = getAdminModel();
+
+    if (!adminModel?.create) {
+      return next(new ValidationError("Admin database model is unavailable."));
+    }
+
+    const existingAdmin = await adminModel.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    if (existingAdmin) {
+      return next(
+        new ValidationError("Admin already exists with this Gmail.")
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const admin = await adminModel.create({
+      data: {
+        name: "Admin",
+        email,
+        password: hashedPassword,
+      },
+    });
+
+    return res.status(201).json({
+      status: "success",
+      success: true,
+      admin: mapGatewayAdminAccount(admin),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const normalizeNotificationText = (value: unknown, maxLength = 1000) =>
+  typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+
+const mapGatewayNotification = (notification: NotificationAccount) => ({
+  id: notification.id || "",
+  title: notification.title || "Notification",
+  message: notification.message || "",
+  creatorId: notification.creatorId || "admin",
+  receiverId: notification.receiverId || "all",
+  redirectLink: notification.redirect_link || "",
+  created:
+    notification.createdAt && !Number.isNaN(new Date(notification.createdAt).getTime())
+      ? new Date(notification.createdAt).toLocaleDateString("en-GB")
+      : "",
+  createdAt: notification.createdAt,
+});
+
+const getNotificationSearchText = (
+  notification: ReturnType<typeof mapGatewayNotification>
+) =>
+  [
+    notification.title,
+    notification.message,
+    notification.creatorId,
+    notification.receiverId,
+    notification.redirectLink,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+const normalizeNotificationTarget = (value: unknown) =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
+const sellerWideNotificationTargets = new Set([
+  "",
+  "all",
+  "seller",
+  "sellers",
+  "all-sellers",
+  "all_sellers",
+]);
+
+export const getAdminNotificationList = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const notificationModel = getNotificationModel();
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+
+    if (!notificationModel?.findMany) {
+      return res.status(200).json({
+        status: "success",
+        notifications: [],
+        pagination: {
+          page,
+          limit,
+          totalNotifications: 0,
+          totalPages: 1,
+        },
+      });
+    }
+
+    const notifications = (
+      await notificationModel.findMany({
+        orderBy: {
+          createdAt: "desc",
+        },
+      })
+    )
+      .map(mapGatewayNotification)
+      .filter((notification) =>
+        search
+          ? getNotificationSearchText(notification).includes(search.toLowerCase())
+          : true
+      );
+    const totalNotifications = notifications.length;
+    const totalPages = Math.max(Math.ceil(totalNotifications / limit), 1);
+    const currentPage = Math.min(page, totalPages);
+    const startIndex = (currentPage - 1) * limit;
+
+    return res.status(200).json({
+      status: "success",
+      notifications: notifications.slice(startIndex, startIndex + limit),
+      pagination: {
+        page: currentPage,
+        limit,
+        totalNotifications,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getSellerNotificationList = async (
+  req: Request & { user?: any; seller?: any },
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const notificationModel = getNotificationModel();
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+    const seller = req.seller ?? req.user;
+    const sellerTargets = new Set(
+      [
+        seller?.id,
+        seller?._id,
+        seller?.email,
+        seller?.shop?.id,
+        seller?.shop?._id,
+        seller?.shop?.name,
+      ]
+        .map(normalizeNotificationTarget)
+        .filter(Boolean)
+    );
+
+    if (!notificationModel?.findMany) {
+      return res.status(200).json({
+        status: "success",
+        notifications: [],
+        pagination: {
+          page,
+          limit,
+          totalNotifications: 0,
+          totalPages: 1,
+        },
+      });
+    }
+
+    const notifications = (
+      await notificationModel.findMany({
+        orderBy: {
+          createdAt: "desc",
+        },
+      })
+    )
+      .map(mapGatewayNotification)
+      .filter((notification) => {
+        const receiver = normalizeNotificationTarget(notification.receiverId);
+
+        return (
+          sellerWideNotificationTargets.has(receiver) ||
+          sellerTargets.has(receiver)
+        );
+      })
+      .filter((notification) =>
+        search
+          ? getNotificationSearchText(notification).includes(search.toLowerCase())
+          : true
+      );
+    const totalNotifications = notifications.length;
+    const totalPages = Math.max(Math.ceil(totalNotifications / limit), 1);
+    const currentPage = Math.min(page, totalPages);
+    const startIndex = (currentPage - 1) * limit;
+
+    return res.status(200).json({
+      status: "success",
+      notifications: notifications.slice(startIndex, startIndex + limit),
+      pagination: {
+        page: currentPage,
+        limit,
+        totalNotifications,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const createAdminNotification = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const title = normalizeNotificationText(req.body?.title, 140);
+    const message = normalizeNotificationText(req.body?.message, 1000);
+    const creatorId =
+      normalizeNotificationText(req.body?.creatorId, 120) || "admin";
+    const receiverId =
+      normalizeNotificationText(req.body?.receiverId, 120) ||
+      normalizeNotificationText(req.body?.target, 120) ||
+      "all";
+    const redirectLink =
+      normalizeNotificationText(req.body?.redirectLink, 1000) ||
+      normalizeNotificationText(req.body?.redirect_link, 1000);
+
+    if (!title || !message) {
+      return next(
+        new ValidationError("Notification title and message are required.")
+      );
+    }
+
+    const notificationModel = getNotificationModel();
+
+    if (!notificationModel?.create) {
+      return next(
+        new ValidationError("Notification database model is unavailable.")
+      );
+    }
+
+    const notification = await notificationModel.create({
+      data: {
+        title,
+        message,
+        creatorId,
+        receiverId,
+        redirect_link: redirectLink || null,
+      },
+    });
+
+    return res.status(201).json({
+      status: "success",
+      success: true,
+      notification: mapGatewayNotification(notification),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const defaultSiteCustomization: {
+  categories: string[];
+  subCategories: Record<string, string[]>;
+  logoUrl: string;
+  bannerUrl: string;
+} = {
+  categories: [
+    "Electronics",
+    "Fashion",
+    "Home & Kitchen",
+    "Sports & Fitness",
+  ],
+  subCategories: {
+    Electronics: ["Mobiles", "Laptops", "Accessories", "Gaming"],
+    Fashion: ["Men", "Women", "Kids", "Footwear"],
+    "Home & Kitchen": ["Furniture", "Appliances", "Decor"],
+    "Sports & Fitness": ["Gym Equipment", "Outdoor Sports", "Wearables"],
+  },
+  logoUrl: "",
+  bannerUrl: "",
+};
+
+const normalizeSiteStringArray = (value: unknown) =>
+  Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+const getSiteConfigRows = async () => {
+  try {
+    const result = await prisma.$runCommandRaw({
+      find: "site_config",
+      sort: {
+        updatedAt: -1,
+        createdAt: -1,
+      },
+      batchSize: 50,
+    });
+
+    return ((result as any)?.cursor?.firstBatch ?? []) as SiteConfigAccount[];
+  } catch {
+    return [];
+  }
+};
+
+const mapSiteCustomization = (config?: SiteConfigAccount) => {
+  const categories = normalizeSiteStringArray(config?.categories);
+
+  return {
+    id: config?.id || "",
+    categories: categories.length
+      ? categories
+      : defaultSiteCustomization.categories,
+    subCategories:
+      config?.subCategories && typeof config.subCategories === "object"
+        ? config.subCategories
+        : defaultSiteCustomization.subCategories,
+    logoUrl:
+      typeof config?.logoUrl === "string"
+        ? config.logoUrl
+        : typeof config?.logo === "string"
+          ? config.logo
+          : typeof config?.siteLogo === "string"
+            ? config.siteLogo
+            : typeof config?.profilePhoto === "string"
+              ? config.profilePhoto
+              : typeof config?.profilePhotoUrl === "string"
+                ? config.profilePhotoUrl
+                : typeof config?.avatar === "string"
+                  ? config.avatar
+                  : typeof config?.avatarUrl === "string"
+                    ? config.avatarUrl
+                    : "",
+    bannerUrl:
+      typeof config?.bannerUrl === "string"
+        ? config.bannerUrl
+        : typeof config?.banner === "string"
+          ? config.banner
+          : typeof config?.siteBanner === "string"
+            ? config.siteBanner
+            : typeof config?.coverPhoto === "string"
+              ? config.coverPhoto
+              : typeof config?.coverPhotoUrl === "string"
+                ? config.coverPhotoUrl
+                : typeof config?.coverBanner === "string"
+                  ? config.coverBanner
+                  : typeof config?.coverBannerUrl === "string"
+                    ? config.coverBannerUrl
+                    : "",
+    updatedAt: config?.updatedAt || null,
+  };
+};
+
+const getSiteCustomization = async () => {
+  const configs = await getSiteConfigRows();
+  const mappedConfigs = configs.map(mapSiteCustomization);
+
+  return (
+    mappedConfigs.find(
+      (customization) => customization.logoUrl || customization.bannerUrl
+    ) ||
+    mappedConfigs[0] ||
+    mapSiteCustomization()
+  );
+};
+
+const normalizeCustomizationImage = async (
+  value: unknown,
+  folder: string,
+  fileNamePrefix: string
+) => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const image = normalizeNotificationText(value, 10 * 1024 * 1024);
+
+  if (!image) {
+    return "";
+  }
+
+  return resolveStorefrontImageUrl(image, folder, fileNamePrefix);
+};
+
+const getSiteSubCategoryPayload = (
+  value: unknown,
+  fallbackCategory?: unknown,
+  fallbackSubCategory?: unknown
+) => {
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    category: normalizeNotificationText(record.category ?? fallbackCategory, 120),
+    subCategory: normalizeNotificationText(
+      record.subCategory ??
+        record.subcategory ??
+        record.value ??
+        fallbackSubCategory ??
+        (typeof value === "string" ? value : ""),
+      120
+    ),
+  };
+};
+
+const findSiteCategory = (categories: string[], category: string) =>
+  categories.find((item) => item.toLowerCase() === category.toLowerCase());
+
+const findSiteSubCategoryGroupKey = (
+  subCategories: Record<string, string[]>,
+  category: string
+) =>
+  Object.keys(subCategories).find(
+    (key) => key.toLowerCase() === category.toLowerCase()
+  );
+
+const updateSiteCustomization = async (body: any) => {
+  const current = await getSiteCustomization();
+  let categories = current.categories;
+  const subCategories = Object.entries(current.subCategories || {}).reduce<
+    Record<string, string[]>
+  >((result, [category, values]) => {
+    result[category] = normalizeSiteStringArray(values);
+    return result;
+  }, {});
+  const newCategories = normalizeSiteStringArray(body?.categories);
+  const categoryToAdd = normalizeNotificationText(body?.category, 120);
+  const categoryToDelete = normalizeNotificationText(body?.deleteCategory, 120);
+  const addSubCategory = getSiteSubCategoryPayload(
+    body?.addSubCategory,
+    body?.subCategoryCategory,
+    body?.subCategory ?? body?.subcategory
+  );
+  const deleteSubCategory = getSiteSubCategoryPayload(
+    body?.deleteSubCategory,
+    body?.deleteSubCategoryCategory,
+    body?.deleteSubCategoryValue
+  );
+  const logoUrl = await normalizeCustomizationImage(
+    body?.logoUrl ??
+      body?.logo ??
+      body?.siteLogo ??
+      body?.profilePhoto ??
+      body?.profilePhotoUrl ??
+      body?.avatar ??
+      body?.avatarUrl,
+    "/admin/customization",
+    "site-logo"
+  );
+  const bannerUrl = await normalizeCustomizationImage(
+    body?.bannerUrl ??
+      body?.banner ??
+      body?.siteBanner ??
+      body?.coverPhoto ??
+      body?.coverPhotoUrl ??
+      body?.coverBanner ??
+      body?.coverBannerUrl,
+    "/admin/customization",
+    "site-banner"
+  );
+
+  if (newCategories.length) {
+    categories = Array.from(new Set(newCategories));
+  }
+
+  if (categoryToAdd) {
+    const existingCategory = findSiteCategory(categories, categoryToAdd);
+
+    if (!existingCategory) {
+      categories = [...categories, categoryToAdd];
+    }
+
+    subCategories[existingCategory || categoryToAdd] =
+      subCategories[existingCategory || categoryToAdd] || [];
+  }
+
+  if (categoryToDelete) {
+    const groupKey =
+      findSiteSubCategoryGroupKey(subCategories, categoryToDelete) ||
+      categoryToDelete;
+
+    categories = categories.filter(
+      (category) =>
+        category.toLowerCase() !== categoryToDelete.toLowerCase()
+    );
+    delete subCategories[groupKey];
+  }
+
+  if (
+    body?.addSubCategory !== undefined ||
+    body?.subCategory !== undefined ||
+    body?.subcategory !== undefined
+  ) {
+    if (!addSubCategory.category || !addSubCategory.subCategory) {
+      throw new ValidationError("Category and sub category are required.");
+    }
+
+    const existingCategory =
+      findSiteCategory(categories, addSubCategory.category) ||
+      findSiteSubCategoryGroupKey(subCategories, addSubCategory.category) ||
+      addSubCategory.category;
+
+    if (!findSiteCategory(categories, existingCategory)) {
+      categories = [...categories, existingCategory];
+    }
+
+    const categoryKey =
+      findSiteCategory(categories, existingCategory) || existingCategory;
+    const existingGroupKey =
+      findSiteSubCategoryGroupKey(subCategories, categoryKey) || categoryKey;
+    const currentSubCategories = normalizeSiteStringArray(
+      subCategories[existingGroupKey]
+    );
+
+    if (!findSiteCategory(currentSubCategories, addSubCategory.subCategory)) {
+      currentSubCategories.push(addSubCategory.subCategory);
+    }
+
+    if (existingGroupKey !== categoryKey) {
+      delete subCategories[existingGroupKey];
+    }
+
+    subCategories[categoryKey] = currentSubCategories;
+  }
+
+  if (body?.deleteSubCategory !== undefined) {
+    if (!deleteSubCategory.category || !deleteSubCategory.subCategory) {
+      throw new ValidationError("Category and sub category are required.");
+    }
+
+    const categoryKey =
+      findSiteCategory(categories, deleteSubCategory.category) ||
+      findSiteSubCategoryGroupKey(subCategories, deleteSubCategory.category) ||
+      deleteSubCategory.category;
+    const existingGroupKey =
+      findSiteSubCategoryGroupKey(subCategories, categoryKey) || categoryKey;
+
+    if (subCategories[existingGroupKey]) {
+      subCategories[existingGroupKey] = normalizeSiteStringArray(
+        subCategories[existingGroupKey]
+      ).filter(
+        (subCategory) =>
+          subCategory.toLowerCase() !==
+          deleteSubCategory.subCategory.toLowerCase()
+      );
+    }
+  }
+
+  const now = new Date();
+  const updateData: Record<string, unknown> = {
+    categories,
+    subCategories,
+    updatedAt: { $date: now.toISOString() },
+  };
+
+  if (logoUrl !== undefined) {
+    updateData.logoUrl = logoUrl;
+    updateData.profilePhotoUrl = logoUrl;
+  } else {
+    updateData.logoUrl = current.logoUrl;
+    updateData.profilePhotoUrl = current.logoUrl;
+  }
+
+  if (bannerUrl !== undefined) {
+    updateData.bannerUrl = bannerUrl;
+    updateData.coverPhotoUrl = bannerUrl;
+  } else {
+    updateData.bannerUrl = current.bannerUrl;
+    updateData.coverPhotoUrl = current.bannerUrl;
+  }
+
+  await prisma.$runCommandRaw({
+    update: "site_config",
+    updates: [
+      {
+        q: {},
+        u: {
+          $set: updateData,
+          $setOnInsert: {
+            createdAt: { $date: now.toISOString() },
+          },
+        },
+        upsert: true,
+      },
+    ],
+  });
+
+  return getSiteCustomization();
+};
+
+export const getAdminCustomization = async (
+  _req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const customization = await getSiteCustomization();
+
+    return res.status(200).json({
+      status: "success",
+      success: true,
+      customization,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const updateAdminCustomization = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const customization = await updateSiteCustomization(req.body);
+
+    return res.status(200).json({
+      status: "success",
+      success: true,
+      customization,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 const getDashboardModel = (modelName: string) => (prisma as any)[modelName];
 
 const countDashboardRecords = async (modelName: string) => {
@@ -137,6 +917,106 @@ const countDashboardRecords = async (modelName: string) => {
     return model.count();
   } catch {
     return 0;
+  }
+};
+
+const countDashboardEvents = async () => {
+  try {
+    const productsModel = getDashboardModel("products");
+
+    if (!productsModel?.count) {
+      return 0;
+    }
+
+    return productsModel.count({
+      where: {
+        OR: [
+          {
+            starting_date: {
+              not: null,
+            },
+          },
+          {
+            ending_date: {
+              not: null,
+            },
+          },
+        ],
+      },
+    });
+  } catch {
+    return 0;
+  }
+};
+
+const getDashboardOrderStatus = (order: {
+  paymentStatus?: string | null;
+  deliveryStatus?: string | null;
+}) =>
+  String(order.paymentStatus || order.deliveryStatus || "Pending").trim() ||
+  "Pending";
+
+const isDashboardSuccessfulOrder = (order: {
+  paymentStatus?: string | null;
+  deliveryStatus?: string | null;
+}) => {
+  const paymentStatus = String(order.paymentStatus || "").toLowerCase();
+  const deliveryStatus = String(order.deliveryStatus || "").toLowerCase();
+
+  return (
+    ["paid", "success", "successful", "completed"].includes(paymentStatus) ||
+    ["delivered", "completed"].includes(deliveryStatus)
+  );
+};
+
+const isDashboardPendingOrder = (order: {
+  paymentStatus?: string | null;
+  deliveryStatus?: string | null;
+}) => {
+  const paymentStatus = String(order.paymentStatus || "").toLowerCase();
+  const deliveryStatus = String(order.deliveryStatus || "").toLowerCase();
+
+  return paymentStatus.includes("pending") || deliveryStatus.includes("pending");
+};
+
+const getDashboardOrderStats = async () => {
+  const ordersModel = getDashboardModel("orders");
+
+  if (!ordersModel?.findMany) {
+    return {
+      totalOrders: 0,
+      totalRevenue: 0,
+      successfulOrders: 0,
+      pendingOrders: 0,
+    };
+  }
+
+  try {
+    const orders = await ordersModel.findMany({
+      select: {
+        totalAmount: true,
+        paymentStatus: true,
+        deliveryStatus: true,
+      },
+    });
+
+    return {
+      totalOrders: orders.length,
+      totalRevenue: orders.reduce(
+        (sum: number, order: { totalAmount?: number | null }) =>
+          sum + Number(order.totalAmount || 0),
+        0
+      ),
+      successfulOrders: orders.filter(isDashboardSuccessfulOrder).length,
+      pendingOrders: orders.filter(isDashboardPendingOrder).length,
+    };
+  } catch {
+    return {
+      totalOrders: 0,
+      totalRevenue: 0,
+      successfulOrders: 0,
+      pendingOrders: 0,
+    };
   }
 };
 
@@ -307,15 +1187,19 @@ const getDashboardRecentOrders = async () => {
           id: string;
           totalAmount?: number;
           paymentStatus?: string;
+          deliveryStatus?: string;
           user?: { name?: string | null; email?: string | null };
         },
-        index: number
-      ) => ({
-        id: `ORD-${String(index + 1).padStart(3, "0")}`,
-        customer: order.user?.name || order.user?.email || "Unknown customer",
-        amount: `$${Number(order.totalAmount || 0).toFixed(0)}`,
-        status: order.paymentStatus || "Pending",
-      })
+      ) => {
+        const orderId = String(order.id || "");
+
+        return {
+          id: orderId ? `ORD-${orderId.slice(-6).toUpperCase()}` : "ORD",
+          customer: order.user?.name || order.user?.email || "Unknown customer",
+          amount: `$${Number(order.totalAmount || 0).toFixed(0)}`,
+          status: getDashboardOrderStatus(order),
+        };
+      }
     );
   } catch {
     return [];
@@ -828,8 +1712,6 @@ export const loginUser = async ( req: Request, res: Response, next: NextFunction
 
     clearAuthCookie(res, "access_token");
     clearAuthCookie(res, "refresh_token");
-    clearAuthCookie(res, "seller-access-token");
-    clearAuthCookie(res, "seller-refresh-token");
 
 
     // Generate access token
@@ -923,7 +1805,7 @@ export const refreshToken = async ( req: any, res: Response, next: NextFunction 
     }
 
     if (!account) {
-      return new AuthError("Forbidden! User/Seller not found");
+      return next(new AuthError("Forbidden! User/Seller not found"));
     }
 
     const newAccessToken = jwt.sign(
@@ -950,9 +1832,16 @@ export const refreshToken = async ( req: any, res: Response, next: NextFunction 
 // get logged in user
 export const getUser = async ( req: any, res: Response, next: NextFunction ) => {
   try {
-    getAuthenticatedUserId(req);
-
-    const user = req.user;
+    const userId = getAuthenticatedUserId(req);
+    const user =
+      (await prisma.users.findUnique({
+        where: {
+          id: userId,
+        },
+        include: {
+          avatar: true,
+        },
+      })) || req.user;
 
     res.status(201).json({
     success: true,
@@ -1370,8 +2259,6 @@ export const sellerLogin = async ( req: Request, res: Response, next: NextFuncti
     }
 
 
-    clearAuthCookie(res, "access_token");
-    clearAuthCookie(res, "refresh_token");
     clearAuthCookie(res, "seller-access-token");
     clearAuthCookie(res, "seller-refresh-token");
     
@@ -1448,10 +2335,6 @@ export const loginAdmin = async ( req: Request, res: Response, next: NextFunctio
       return next(new AuthError("Invalid email or password"));
     }
 
-    clearAuthCookie(res, "access_token");
-    clearAuthCookie(res, "refresh_token");
-    clearAuthCookie(res, "seller-access-token");
-    clearAuthCookie(res, "seller-refresh-token");
     clearAuthCookie(res, "admin-access-token");
     clearAuthCookie(res, "admin-refresh-token");
 
@@ -1503,7 +2386,8 @@ export const getAdminDashboard = async (
       totalUsers,
       totalSellers,
       totalProducts,
-      totalOrders,
+      totalEvents,
+      orderStats,
       revenue,
       recentOrders,
       distribution,
@@ -1511,41 +2395,40 @@ export const getAdminDashboard = async (
       countDashboardRecords("users"),
       countDashboardRecords("sellers"),
       countDashboardRecords("products"),
-      countDashboardRecords("orders"),
+      countDashboardEvents(),
+      getDashboardOrderStats(),
       getDashboardRevenue(),
       getDashboardRecentOrders(),
       getDashboardDistribution(),
     ]);
-    const totalRevenue = revenue.reduce((sum, item) => sum + item.total, 0);
-    const successfulOrders = recentOrders.filter(
-      (order) => order.status.toLowerCase() === "paid"
-    ).length;
-    const pendingOrders = recentOrders.filter(
-      (order) => order.status.toLowerCase() === "pending"
-    ).length;
+    const dashboard = {
+      stats: {
+        totalUsers,
+        totalSellers,
+        totalProducts,
+        totalEvents,
+        totalOrders: orderStats.totalOrders,
+        totalRevenue: orderStats.totalRevenue,
+        successfulOrders: orderStats.successfulOrders,
+        pendingOrders: orderStats.pendingOrders,
+      },
+      revenue,
+      revenueMarker: getDashboardRevenueMarker(revenue),
+      deviceUsage: getDashboardDeviceUsage(
+        totalUsers,
+        totalSellers,
+        orderStats.totalOrders
+      ),
+      distribution,
+      recentOrders,
+    };
 
     return res.status(200).json({
       status: "success",
-      data: {
-        stats: {
-          totalUsers,
-          totalSellers,
-          totalProducts,
-          totalOrders,
-          totalRevenue,
-          successfulOrders,
-          pendingOrders,
-        },
-        revenue,
-        revenueMarker: getDashboardRevenueMarker(revenue),
-        deviceUsage: getDashboardDeviceUsage(
-          totalUsers,
-          totalSellers,
-          totalOrders
-        ),
-        distribution,
-        recentOrders,
-      },
+      success: true,
+      data: dashboard,
+      dashboard,
+      ...dashboard,
     });
   } catch (error) {
     return next(error);
@@ -1560,6 +2443,177 @@ const formatAdminCollectionDate = (value?: Date | string) => {
   }
 
   return date.toLocaleDateString("en-GB");
+};
+
+const ADMIN_PAYMENT_FEE_RATE = 0.1;
+
+const formatGatewayPaymentCurrency = (value: number) =>
+  `$${Number(value || 0).toFixed(2)}`;
+
+const formatGatewayPaymentOrderId = (id: string) =>
+  `#${String(id || "").slice(-6).toUpperCase()}`;
+
+const mapGatewayAdminPayment = (order: any) => {
+  const totalAmount = Number(order.totalAmount || 0);
+  const adminFee = totalAmount * ADMIN_PAYMENT_FEE_RATE;
+  const sellerEarnings = totalAmount - adminFee;
+
+  return {
+    id: order.id || "",
+    orderId: formatGatewayPaymentOrderId(order.id),
+    shop: order.shop?.name || "Unknown shop",
+    buyer: order.user?.name || order.user?.email || "Unknown buyer",
+    adminFee: formatGatewayPaymentCurrency(adminFee),
+    adminFeeValue: Number(adminFee.toFixed(2)),
+    sellerEarnings: formatGatewayPaymentCurrency(sellerEarnings),
+    sellerEarningsValue: Number(sellerEarnings.toFixed(2)),
+    total: formatGatewayPaymentCurrency(totalAmount),
+    totalValue: Number(totalAmount.toFixed(2)),
+    paymentStatus: getDashboardOrderStatus(order),
+    date: formatAdminCollectionDate(order.createdAt),
+    createdAt: order.createdAt,
+  };
+};
+
+const matchesGatewayAdminPaymentSearch = (
+  payment: ReturnType<typeof mapGatewayAdminPayment>,
+  search: string
+) => {
+  if (!search) {
+    return true;
+  }
+
+  return [
+    payment.orderId,
+    payment.shop,
+    payment.buyer,
+    payment.adminFee,
+    payment.sellerEarnings,
+    payment.total,
+    payment.paymentStatus,
+    payment.date,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(search.toLowerCase());
+};
+
+const paginateGatewayAdminPayments = <T,>(items: T[], page: number, limit: number) => {
+  const requestedPage = Number(page || 1);
+  const requestedLimit = Number(limit || 10);
+  const safePage = Number.isFinite(requestedPage)
+    ? Math.max(requestedPage, 1)
+    : 1;
+  const safeLimit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 100)
+    : 10;
+  const totalPages = Math.max(Math.ceil(items.length / safeLimit), 1);
+  const currentPage = Math.min(safePage, totalPages);
+  const startIndex = (currentPage - 1) * safeLimit;
+
+  return {
+    items: items.slice(startIndex, startIndex + safeLimit),
+    pagination: {
+      page: currentPage,
+      limit: safeLimit,
+      totalPayments: items.length,
+      totalPages,
+    },
+  };
+};
+
+export const getAdminPayments = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const ordersModel = getDashboardModel("orders");
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 10);
+
+    if (!ordersModel?.findMany) {
+      return res.status(200).json({
+        status: "success",
+        success: true,
+        payments: [],
+        pagination: {
+          page: 1,
+          limit,
+          totalPayments: 0,
+          totalPages: 1,
+        },
+        summary: {
+          totalRevenue: "$0.00",
+          totalAdminFees: "$0.00",
+          totalSellerEarnings: "$0.00",
+        },
+      });
+    }
+
+    const orders = await ordersModel.findMany({
+      take: 500,
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+    const payments = orders
+      .map(mapGatewayAdminPayment)
+      .filter((payment: ReturnType<typeof mapGatewayAdminPayment>) =>
+        matchesGatewayAdminPaymentSearch(payment, search)
+      );
+    const { items, pagination } = paginateGatewayAdminPayments(
+      payments,
+      page,
+      limit
+    );
+    const totalRevenue = payments.reduce(
+      (sum: number, payment: ReturnType<typeof mapGatewayAdminPayment>) =>
+        sum + payment.totalValue,
+      0
+    );
+    const totalAdminFees = payments.reduce(
+      (sum: number, payment: ReturnType<typeof mapGatewayAdminPayment>) =>
+        sum + payment.adminFeeValue,
+      0
+    );
+    const totalSellerEarnings = payments.reduce(
+      (sum: number, payment: ReturnType<typeof mapGatewayAdminPayment>) =>
+        sum + payment.sellerEarningsValue,
+      0
+    );
+
+    return res.status(200).json({
+      status: "success",
+      success: true,
+      payments: items,
+      pagination,
+      summary: {
+        totalRevenue: formatGatewayPaymentCurrency(totalRevenue),
+        totalAdminFees: formatGatewayPaymentCurrency(totalAdminFees),
+        totalSellerEarnings: formatGatewayPaymentCurrency(totalSellerEarnings),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 const getGatewaySellerAvatar = (seller: any) => {

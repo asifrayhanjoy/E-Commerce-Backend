@@ -1,13 +1,16 @@
 import express, { Router } from "express";
-import { changeUserPassword, createPaymentIntent, createPaymentSession, getAdminOrders, getSellerOrder, getSellerOrders, getSellerPayments, getUserOrders, updateSellerOrderDeliveryStatus, verifyCouponCode, verifyingPaymentSession } from "../controllers/order.controller";
+import { changeUserPassword, confirmPaymentSession, createPaymentIntent, createPaymentSession, getAdminOrders, getAdminPayments, getSellerOrder, getSellerOrders, getSellerPayments, getUserOrder, getUserOrders, updateSellerOrderDeliveryStatus, verifyCouponCode, verifyingPaymentSession } from "../controllers/order.controller";
 import isAuthenticated from "../middleware/isAuthenticated";
 
 const router: Router = express.Router();
 
 router.post("/create-payment-intent", isAuthenticated, createPaymentIntent );
 router.post("/create-payment-session", isAuthenticated, createPaymentSession );
+router.post("/confirm-payment-session", isAuthenticated, confirmPaymentSession );
 router.get("/my-orders", isAuthenticated, getUserOrders );
+router.get("/my-orders/:orderId", isAuthenticated, getUserOrder );
 router.get("/admin/orders", getAdminOrders );
+router.get("/admin/payments", getAdminPayments );
 router.get("/verifying-payment-session", isAuthenticated, verifyingPaymentSession );
 router.get("/get-Seller-Orders", isAuthenticated, getSellerOrders );
 router.get("/get-Seller-Payments", isAuthenticated, getSellerPayments );

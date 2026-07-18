@@ -103,6 +103,63 @@ const getCartItemCount = (cart: unknown) => {
   }, 0);
 };
 
+const enrichOrderCartItems = async (cart: unknown) => {
+  if (!Array.isArray(cart)) {
+    return [];
+  }
+
+  const productIds = cart
+    .map((item: any) => item?.id || item?.productId)
+    .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
+
+  if (productIds.length === 0) {
+    return cart;
+  }
+
+  const products = await prisma.products.findMany({
+    where: {
+      id: {
+        in: [...new Set(productIds)],
+      },
+    },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      images: true,
+      sale_price: true,
+      regular_price: true,
+    },
+  });
+  const productById = new Map(products.map((product) => [product.id, product]));
+
+  return cart.map((item: any) => {
+    const product = productById.get(item?.id || item?.productId);
+
+    return {
+      ...item,
+      product,
+      title: item?.title || product?.title || "Product",
+      images: item?.images || product?.images || [],
+      sale_price: item?.sale_price ?? product?.sale_price ?? 0,
+      regular_price: item?.regular_price ?? product?.regular_price ?? 0,
+    };
+  });
+};
+
+const getTrackingSteps = (deliveryStatus?: string | null) => {
+  const currentIndex = Math.max(
+    DELIVERY_STATUSES.findIndex((status) => status === deliveryStatus),
+    0
+  );
+
+  return DELIVERY_STATUSES.map((status, index) => ({
+    label: status,
+    completed: index <= currentIndex,
+    current: index === currentIndex,
+  }));
+};
+
 const mapOrderToSellerPayment = (order: any) => {
   const totalAmount = getOrderPaymentTotal(order);
 
@@ -140,6 +197,31 @@ const formatAdminOrderDate = (value: Date | string) => {
   ].join("/");
 };
 
+const formatAdminPaymentCurrency = (value: number) =>
+  `$${Number(value || 0).toFixed(2)}`;
+
+const mapOrderToAdminPayment = (order: any) => {
+  const totalAmount = getOrderPaymentTotal(order);
+  const adminFee = toMoneyAmount(totalAmount * ADMIN_FEE_RATE);
+  const sellerEarnings = toMoneyAmount(totalAmount * SELLER_EARNING_RATE);
+
+  return {
+    id: order.id,
+    orderId: formatAdminOrderId(order.id),
+    shop: order.shop?.name || "Unknown shop",
+    buyer: order.user?.name || order.user?.email || "Unknown buyer",
+    adminFee: formatAdminPaymentCurrency(adminFee),
+    adminFeeValue: adminFee,
+    sellerEarnings: formatAdminPaymentCurrency(sellerEarnings),
+    sellerEarningsValue: sellerEarnings,
+    total: formatAdminPaymentCurrency(totalAmount),
+    totalValue: toMoneyAmount(totalAmount),
+    paymentStatus: order.paymentStatus || "Pending",
+    date: formatAdminOrderDate(order.createdAt),
+    createdAt: order.createdAt,
+  };
+};
+
 const mapOrderToAdminOrder = (order: any) => ({
   id: order.id,
   orderId: formatAdminOrderId(order.id),
@@ -167,6 +249,77 @@ const matchesAdminOrderSearch = (order: ReturnType<typeof mapOrderToAdminOrder>,
     .toLowerCase();
 
   return searchableText.includes(search.toLowerCase());
+};
+
+const matchesAdminPaymentSearch = (
+  payment: ReturnType<typeof mapOrderToAdminPayment>,
+  search: string
+) => {
+  if (!search) {
+    return true;
+  }
+
+  const searchableText = [
+    payment.orderId,
+    payment.shop,
+    payment.buyer,
+    payment.adminFee,
+    payment.sellerEarnings,
+    payment.total,
+    payment.paymentStatus,
+    payment.date,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return searchableText.includes(search.toLowerCase());
+};
+
+const paginateAdminPayments = <T,>(items: T[], page: number, limit: number) => {
+  const requestedPage = Number(page || 1);
+  const requestedLimit = Number(limit || 10);
+  const safePage = Number.isFinite(requestedPage)
+    ? Math.max(requestedPage, 1)
+    : 1;
+  const safeLimit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 100)
+    : 10;
+  const totalPages = Math.max(Math.ceil(items.length / safeLimit), 1);
+  const currentPage = Math.min(safePage, totalPages);
+  const startIndex = (currentPage - 1) * safeLimit;
+
+  return {
+    payments: items.slice(startIndex, startIndex + safeLimit),
+    pagination: {
+      page: currentPage,
+      limit: safeLimit,
+      totalPayments: items.length,
+      totalPages,
+    },
+  };
+};
+
+const getAdminPaymentSummary = (
+  payments: ReturnType<typeof mapOrderToAdminPayment>[]
+) => {
+  const totalRevenue = payments.reduce(
+    (sum, payment) => sum + payment.totalValue,
+    0
+  );
+  const totalAdminFees = payments.reduce(
+    (sum, payment) => sum + payment.adminFeeValue,
+    0
+  );
+  const totalSellerEarnings = payments.reduce(
+    (sum, payment) => sum + payment.sellerEarningsValue,
+    0
+  );
+
+  return {
+    totalRevenue: formatAdminPaymentCurrency(totalRevenue),
+    totalAdminFees: formatAdminPaymentCurrency(totalAdminFees),
+    totalSellerEarnings: formatAdminPaymentCurrency(totalSellerEarnings),
+  };
 };
 
 const parseStoredSession = <T>(value: unknown): T => {
@@ -441,6 +594,143 @@ type PaymentSessionData = {
   } | null;
 };
 
+const createOrdersForPaymentSession = async (params: {
+  paymentIntent: Stripe.PaymentIntent;
+  sessionId: string;
+  userId: string;
+  session: PaymentSessionData;
+}) => {
+  const { paymentIntent, sessionId, userId, session } = params;
+  const { cart, coupon } = session;
+
+  if (!Array.isArray(cart) || cart.length === 0) {
+    throw new ValidationError("Invalid payment session cart");
+  }
+
+  if (session.userId !== userId) {
+    throw new ValidationError("Payment session does not belong to this user.");
+  }
+
+  const user = await prisma.users.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, email: true },
+  });
+
+  if (!user) {
+    throw new ValidationError("User not found");
+  }
+
+  const shopGrouped = cart.reduce<Record<string, OrderCartItem[]>>(
+    (acc, item) => {
+      if (!acc[item.shopId]) {
+        acc[item.shopId] = [];
+      }
+      acc[item.shopId].push(item);
+      return acc;
+    },
+    {}
+  );
+  const orders: any[] = [];
+
+  for (const [shopId, orderItems] of Object.entries(shopGrouped)) {
+    const existingOrder = await prisma.orders.findFirst({
+      where: {
+        shopId,
+        paymentIntentId: paymentIntent.id,
+      },
+    });
+
+    if (existingOrder) {
+      orders.push(existingOrder);
+      continue;
+    }
+
+    let orderTotal = orderItems.reduce(
+      (sum, item) => sum + item.quantity * item.sale_price,
+      0
+    );
+
+    if (coupon?.discountedProductId) {
+      const discountedItem = orderItems.find(
+        (item) => item.id === coupon.discountedProductId
+      );
+
+      if (discountedItem) {
+        const discount =
+          (coupon.discountPercent || 0) > 0
+            ? (discountedItem.sale_price *
+                discountedItem.quantity *
+                (coupon.discountPercent || 0)) /
+              100
+            : coupon.discountAmount || 0;
+
+        orderTotal = Math.max(orderTotal - discount, 0);
+      }
+    }
+
+    for (const item of orderItems) {
+      await prisma.products.update({
+        where: { id: item.id },
+        data: {
+          stock: { decrement: item.quantity },
+        },
+      });
+    }
+
+    const order = await prisma.orders.create({
+      data: {
+        userId,
+        shopId,
+        cart: orderItems,
+        totalAmount: orderTotal,
+        coupon: coupon || null,
+        paymentIntentId: paymentIntent.id,
+        paymentSessionId: sessionId,
+        paymentStatus: "Paid",
+        deliveryStatus: "Ordered",
+        shippingAddressId: session.shippingAddressId || null,
+      },
+    });
+
+    orders.push(order);
+  }
+
+  const totalAmount =
+    session.totalAmount ??
+    cart.reduce((total, item) => total + item.quantity * item.sale_price, 0);
+  const orderRedirectLink = `${
+    process.env.FRONTEND_URL || "https://eshop.com"
+  }/order/${sessionId}`;
+
+  await sendEmail(
+    user.email,
+    "🛍 Your Eshop Order Confirmation",
+    "order-confirmation",
+    {
+      name: user.name,
+      cart,
+      totalAmount: coupon?.discountAmount
+        ? totalAmount - coupon.discountAmount
+        : totalAmount,
+      trackingUrl: orderRedirectLink,
+    }
+  );
+
+  await prisma.notifications.create({
+    data: {
+      title: "📦 Platform Order Alert",
+      message: `A new order was placed by ${user.name}.`,
+      creatorId: userId,
+      receiverId: "admin",
+      redirect_link: orderRedirectLink,
+    },
+  });
+
+  await redisClient.del(`payment-session:${sessionId}`);
+
+  return orders;
+};
+
 export const createOrder = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const stripe = getStripeClient();
@@ -489,132 +779,112 @@ export const createOrder = async (req: Request, res: Response, next: NextFunctio
     }
 
     const session = parseStoredSession<PaymentSessionData>(sessionData);
-    const { cart, coupon } = session;
-
-    if (!Array.isArray(cart) || cart.length === 0) {
-      return res.status(400).send("Invalid payment session cart");
-    }
-
-    const user = await prisma.users.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, email: true },
+    await createOrdersForPaymentSession({
+      paymentIntent,
+      sessionId,
+      userId,
+      session,
     });
-
-    if (!user) {
-      return res.status(404).send("User not found");
-    }
-
-    const shopGrouped = cart.reduce<Record<string, OrderCartItem[]>>(
-      (acc, item) => {
-        if (!acc[item.shopId]) {
-          acc[item.shopId] = [];
-        }
-        acc[item.shopId].push(item);
-        return acc;
-      },
-      {}
-    );
-
-    for (const [shopId, orderItems] of Object.entries(shopGrouped)) {
-      const existingOrder = await prisma.orders.findFirst({
-        where: {
-          shopId,
-          paymentIntentId: paymentIntent.id,
-        },
-      });
-
-      if (existingOrder) {
-        console.log(`Order already processed for shop ${shopId}: ${existingOrder.id}`);
-        continue;
-      }
-
-      let orderTotal = orderItems.reduce(
-        (sum, item) => sum + item.quantity * item.sale_price,
-        0
-      );
-
-      if (coupon?.discountedProductId) {
-        const discountedItem = orderItems.find(
-          (item) => item.id === coupon.discountedProductId
-        );
-
-        if (discountedItem) {
-          const discount =
-            (coupon.discountPercent || 0) > 0
-              ? (discountedItem.sale_price *
-                  discountedItem.quantity *
-                  (coupon.discountPercent || 0)) /
-                100
-              : coupon.discountAmount || 0;
-
-          orderTotal = Math.max(orderTotal - discount, 0);
-        }
-      }
-
-      for (const item of orderItems) {
-        await prisma.products.update({
-          where: { id: item.id },
-          data: {
-            stock: { decrement: item.quantity },
-          },
-        });
-      }
-
-      await prisma.orders.create({
-        data: {
-          userId,
-          shopId,
-          cart: orderItems,
-          totalAmount: orderTotal,
-          coupon: coupon || null,
-          paymentIntentId: paymentIntent.id,
-          paymentSessionId: sessionId,
-          paymentStatus: "Paid",
-          deliveryStatus: "Ordered",
-          shippingAddressId: session.shippingAddressId || null,
-        },
-      });
-
-      console.log(`Processed order for shop ${shopId}: ${orderTotal}`);
-    }
-
-    const totalAmount =
-      session.totalAmount ??
-      cart.reduce((total, item) => total + item.quantity * item.sale_price, 0);
-    const { name, email } = user;
-    const orderRedirectLink = `${
-      process.env.FRONTEND_URL || "https://eshop.com"
-    }/order/${sessionId}`;
-
-    await sendEmail(
-      email,
-      "🛍 Your Eshop Order Confirmation",
-      "order-confirmation",
-      {
-        name,
-        cart,
-        totalAmount: coupon?.discountAmount
-          ? totalAmount - coupon.discountAmount
-          : totalAmount,
-        trackingUrl: orderRedirectLink,
-      }
-    );
-
-    await prisma.notifications.create({
-      data: {
-        title: "📦 Platform Order Alert",
-        message: `A new order was placed by ${name}.`,
-        creatorId: userId,
-        receiverId: "admin",
-        redirect_link: orderRedirectLink,
-      },
-    });
-
-    await redisClient.del(sessionKey);
 
     return res.status(200).json({
       received: true,
       message: "Order processed successfully",
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const confirmPaymentSession = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    if (req.role !== "user" || !req.user?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only users can confirm their payment.",
+      });
+    }
+
+    const sessionId =
+      typeof req.body?.sessionId === "string" ? req.body.sessionId : "";
+    const paymentIntentId =
+      typeof req.body?.paymentIntentId === "string"
+        ? req.body.paymentIntentId
+        : "";
+
+    if (!sessionId || !paymentIntentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment session ID and payment intent ID are required.",
+      });
+    }
+
+    const stripe = getStripeClient();
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    if (paymentIntent.status !== "succeeded") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment is not completed yet.",
+      });
+    }
+
+    if (
+      paymentIntent.metadata?.sessionId &&
+      paymentIntent.metadata.sessionId !== sessionId
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Payment session does not match this payment.",
+      });
+    }
+
+    if (
+      paymentIntent.metadata?.userId &&
+      paymentIntent.metadata.userId !== req.user.id
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Payment does not belong to this user.",
+      });
+    }
+
+    const existingOrders = await prisma.orders.findMany({
+      where: {
+        userId: req.user.id,
+        paymentIntentId,
+      },
+    });
+
+    if (existingOrders.length > 0) {
+      return res.status(200).json({
+        success: true,
+        message: "Order already confirmed.",
+        orders: existingOrders,
+      });
+    }
+
+    const sessionKey = `payment-session:${sessionId}`;
+    const sessionData = await redisClient.get<unknown>(sessionKey);
+
+    if (!sessionData) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment session expired before order creation.",
+      });
+    }
+
+    const session = parseStoredSession<PaymentSessionData>(sessionData);
+    const orders = await createOrdersForPaymentSession({
+      paymentIntent,
+      sessionId,
+      userId: req.user.id,
+      session,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Order confirmed successfully.",
+      orders,
     });
   } catch (error) {
     return next(error);
@@ -654,13 +924,15 @@ export const getUserOrders = async (req: any, res: Response, next: NextFunction)
     const ordersWithAddress = await Promise.all(
       orders.map(async (order) => {
         const shippingAddress = await getOrderShippingAddress(order);
+        const cart = await enrichOrderCartItems(order.cart);
 
         return {
           ...order,
-          cart: Array.isArray(order.cart) ? order.cart : [],
-          itemCount: getCartItemCount(order.cart),
+          cart,
+          itemCount: getCartItemCount(cart),
           paymentStatus: order.paymentStatus || "Paid",
           deliveryStatus: order.deliveryStatus || "Ordered",
+          trackingSteps: getTrackingSteps(order.deliveryStatus),
           shippingAddress,
         };
       })
@@ -678,6 +950,79 @@ export const getUserOrders = async (req: any, res: Response, next: NextFunction)
         ).length,
       },
       orders: ordersWithAddress,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// get one logged-in user's order
+export const getUserOrder = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    if (req.role !== "user" || !req.user?.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only users can view this order.",
+      });
+    }
+
+    const orderId = req.params.orderId;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required.",
+      });
+    }
+
+    const order = await prisma.orders.findFirst({
+      where: {
+        userId: req.user.id,
+        OR: getOrderLookupConditions(orderId),
+      },
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            category: true,
+            avatar: true,
+            coverBanner: true,
+            sellers: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone_number: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    const cart = await enrichOrderCartItems(order.cart);
+    const shippingAddress = await getOrderShippingAddress(order);
+
+    return res.status(200).json({
+      success: true,
+      order: {
+        ...order,
+        cart,
+        itemCount: getCartItemCount(cart),
+        paymentStatus: order.paymentStatus || "Paid",
+        deliveryStatus: order.deliveryStatus || "Ordered",
+        trackingSteps: getTrackingSteps(order.deliveryStatus),
+        shippingAddress,
+      },
     });
   } catch (error) {
     return next(error);
@@ -716,6 +1061,47 @@ export const getAdminOrders = async (req: Request, res: Response, next: NextFunc
     return res.status(200).json({
       success: true,
       orders: adminOrders,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getAdminPayments = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 10);
+    const orders = await prisma.orders.findMany({
+      take: 500,
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+    const payments = orders
+      .map(mapOrderToAdminPayment)
+      .filter((payment) => matchesAdminPaymentSearch(payment, search));
+
+    return res.status(200).json({
+      success: true,
+      ...paginateAdminPayments(payments, page, limit),
+      summary: getAdminPaymentSummary(payments),
     });
   } catch (error) {
     return next(error);

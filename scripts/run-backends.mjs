@@ -11,19 +11,38 @@ const nxBin = path.join(
 const services = [
   {
     name: "gateway:8080",
+    port: "8080",
     args: ["serve", "@e-commerce-bg/E-Commerce-BG"],
   },
   {
     name: "product:8181",
+    port: "8181",
     args: ["serve", "@e-commerce-bg/product-service"],
   },
   {
     name: "order:8282",
+    port: "8282",
     args: ["serve", "@e-commerce-bg/order-service"],
   },
   {
     name: "admin:8383",
+    port: "8383",
     args: ["serve", "@e-commerce-bg/admin-service"],
+  },
+  {
+    name: "chatting:8484",
+    port: "8484",
+    args: ["serve", "@e-commerce-bg/chatting-service"],
+  },
+  {
+    name: "logger:8585",
+    port: "8585",
+    args: ["serve", "@e-commerce-bg/logger-service"],
+  },
+  {
+    name: "recommendation:8686",
+    port: "8686",
+    args: ["serve", "@e-commerce-bg/recommendation-service"],
   },
 ];
 
@@ -71,6 +90,7 @@ for (const service of services) {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      PORT: service.port,
       FORCE_COLOR: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -90,9 +110,8 @@ for (const service of services) {
 
     if (!shuttingDown && code !== 0) {
       console.error(
-        `[${service.name}] exited with ${signal || `code ${code}`}. Stopping all backends.`
+        `[${service.name}] exited with ${signal || `code ${code}`}. Other backends will keep running.`
       );
-      shutdown(code || 1);
     }
   });
 }

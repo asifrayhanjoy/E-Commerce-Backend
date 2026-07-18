@@ -58,6 +58,7 @@ const isAuthenticated = async (req: any, res: Response, next: NextFunction) => {
     if (decoded.role === "user") {
       account = await prisma.users.findUnique({
         where: { id: decoded.id },
+        include: { avatar: true },
       });
       req.user = account;
     } else if (decoded.role === "seller") {

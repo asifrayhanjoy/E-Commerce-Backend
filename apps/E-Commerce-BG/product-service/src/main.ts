@@ -9,6 +9,7 @@ import {
   errorMiddleware,
   notFoundMiddleware,
 } from "./middleware/error.middleware";
+import { getHomeProducts } from "./controller/product.controller";
 import productRouter from "./routes/product.route";
 
 dotenv.config({ path: path.resolve(__dirname, "../../../..", ".env") });
@@ -23,8 +24,13 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(
   cors({
-    origin: ["http://localhost:6001", "http://localhost:3000"],
-    allowedHeaders: ["Authorization", "Content-Type"],
+    origin: [
+      "http://localhost:6001",
+      "http://localhost:6002",
+      "http://localhost:6003",
+      "http://localhost:3000",
+    ],
+    allowedHeaders: ["Authorization", "Content-Type", "x-auth-role"],
     credentials: true,
   })
 );
@@ -39,6 +45,7 @@ app.get('/api', (req, res) => {
 });
 
 app.use("/api/v1/products", productRouter);
+app.get("/get-home-products", getHomeProducts);
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);
 

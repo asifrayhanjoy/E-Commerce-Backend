@@ -12,15 +12,20 @@ import cookieParser from "cookie-parser";
 import { errorMiddleware } from "./packages/error-handler";
 import authRouter from "./routes/auth.route";
 import initializeConfig from "./libs/initializeConfig";
-import { getAdminDashboard, getAdminSeller, getAdminSellers } from "./controler/auth.controler";
+import { createAdminNotification, getAdminCustomization, getAdminDashboard, getAdminNotificationList, getAdminPayments, getAdminSeller, getAdminSellers, updateAdminCustomization } from "./controler/auth.controler";
 
 const app = express();
 app.set('trust proxy', 1);
 
 app.use(
   cors({
-    origin: ["http://localhost:6001", "http://localhost:6003", "http://localhost:3000"],
-    allowedHeaders: ["Authorization", "Content-Type"],
+    origin: [
+      "http://localhost:6001",
+      "http://localhost:6002",
+      "http://localhost:6003",
+      "http://localhost:3000",
+    ],
+    allowedHeaders: ["Authorization", "Content-Type", "x-auth-role"],
     credentials: true,
   })
 );
@@ -55,11 +60,51 @@ const productServiceUrl =
   process.env.PRODUCT_SERVICE_URL || "http://127.0.0.1:8181";
 const orderServiceUrl =
   process.env.ORDER_SERVICE_URL || "http://127.0.0.1:8282";
+const chattingServiceUrl =
+  process.env.CHATTING_SERVICE_URL || "http://127.0.0.1:8484";
 
 app.use(
   "/api/v1/products",
   proxy(productServiceUrl, {
     proxyReqPathResolver: (req) => req.originalUrl,
+    proxyErrorHandler: (err, res, next) => {
+      console.error("Product service proxy error:", err);
+
+      if (res.headersSent) {
+        return next(err);
+      }
+
+      return res.status(502).json({
+        status: "error",
+        message: "Product service is unavailable",
+      });
+    },
+  })
+);
+
+app.use(
+  "/api/v1/chats",
+  proxy(chattingServiceUrl, {
+    proxyReqPathResolver: (req) => req.originalUrl,
+    proxyErrorHandler: (err, res, next) => {
+      console.error("Chatting service proxy error:", err);
+
+      if (res.headersSent) {
+        return next(err);
+      }
+
+      return res.status(502).json({
+        status: "error",
+        message: "Chatting service is unavailable",
+      });
+    },
+  })
+);
+
+app.get(
+  "/get-home-products",
+  proxy(productServiceUrl, {
+    proxyReqPathResolver: (req) => `/api/v1/products${req.originalUrl}`,
     proxyErrorHandler: (err, res, next) => {
       console.error("Product service proxy error:", err);
 
@@ -95,9 +140,14 @@ app.use(
   })
 );
 
-app.use(express.json())
+app.use(express.json({ limit: "100mb" }))
 app.use(cookieParser())
 app.get("/api/v1/admin/dashboard", getAdminDashboard);
+app.get("/api/v1/admin/notifications", getAdminNotificationList);
+app.post("/api/v1/admin/notifications", createAdminNotification);
+app.get("/api/v1/admin/payments", getAdminPayments);
+app.get("/api/v1/admin/customization", getAdminCustomization);
+app.patch("/api/v1/admin/customization", updateAdminCustomization);
 app.get("/api/v1/admin/sellers", getAdminSellers);
 app.get("/api/v1/admin/sellers/:sellerId", getAdminSeller);
 app.use("/api/v1/auth", authRouter);

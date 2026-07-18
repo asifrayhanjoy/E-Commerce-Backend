@@ -20,6 +20,8 @@ model users {
   shopReviews shopReviews[]
   addresses   user_addresses[]
   orders      orders[]
+  conversations conversations[] @relation("BuyerConversations")
+  chatMessages  messages[]      @relation("UserChatMessages")
 }
 
 model user_addresses {
@@ -98,6 +100,8 @@ model sellers {
   updatedAt    DateTime @updatedAt
   shopId       String?  @db.ObjectId
   shopsId      String?  @db.ObjectId
+  conversations conversations[] @relation("SellerConversations")
+  chatMessages  messages[]      @relation("SellerChatMessages")
 }
 
 model admins {
@@ -128,6 +132,10 @@ model site_config {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   categories    String[]
   subCategories Json
+  logoUrl       String?
+  bannerUrl     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model discount_codes {
@@ -208,4 +216,54 @@ model products {
   updatedAt             DateTime      @updatedAt
   shopId                String        @db.ObjectId
   Shop                  shops         @relation(fields: [shopId], references: [id])
+  conversations         conversations[] @relation("ProductConversations")
+}
+
+enum chatSenderRole {
+  user
+  seller
+}
+
+model conversations {
+  id                      String    @id @default(auto()) @map("_id") @db.ObjectId
+  buyerId                 String    @db.ObjectId
+  buyer                   users     @relation("BuyerConversations", fields: [buyerId], references: [id])
+  sellerId                String    @db.ObjectId
+  seller                  sellers   @relation("SellerConversations", fields: [sellerId], references: [id])
+  productId               String    @db.ObjectId
+  product                 products  @relation("ProductConversations", fields: [productId], references: [id])
+  messages                messages[]
+  lastMessageText         String?
+  lastMessageSenderRole   chatSenderRole?
+  lastMessageAt           DateTime?
+  buyerUnreadCount        Int       @default(0)
+  sellerUnreadCount       Int       @default(0)
+  buyerLastReadAt         DateTime?
+  sellerLastReadAt        DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@unique([buyerId, sellerId, productId])
+  @@index([buyerId, lastMessageAt])
+  @@index([sellerId, lastMessageAt])
+  @@index([productId])
+}
+
+model messages {
+  id             String         @id @default(auto()) @map("_id") @db.ObjectId
+  conversationId String         @db.ObjectId
+  conversation   conversations  @relation(fields: [conversationId], references: [id])
+  senderRole     chatSenderRole
+  senderUserId   String?        @db.ObjectId
+  senderUser     users?         @relation("UserChatMessages", fields: [senderUserId], references: [id])
+  senderSellerId String?        @db.ObjectId
+  senderSeller   sellers?       @relation("SellerChatMessages", fields: [senderSellerId], references: [id])
+  text           String
+  readAt         DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([conversationId, createdAt])
+  @@index([senderUserId])
+  @@index([senderSellerId])
 }

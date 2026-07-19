@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { createAdminAccount, createAdminNotification, createSellerStorefrontProduct, createShop, createStripeConnectLink, createUserAddress, deleteSellerShop, deleteUserAddress, getAdminCustomization, getAdminDashboard, getAdminManagement, getAdminNotificationList, getAdminPayments, getAdminSeller, getAdminSellers, getSeller, getSellerNotificationList, getSellerSettings, getSellerStorefront, getUser, getUserAddresses, loginAdmin, loginUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateAdminCustomization, updateSellerSettings, updateSellerStorefront, updateSellerStorefrontProduct, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
+import { createAdminAccount, createAdminNotification, createSellerStorefrontProduct, createShop, createStripeConnectLink, createUserAddress, deleteSellerShop, deleteUserAddress, getAdminCustomization, getAdminDashboard, getAdminManagement, getAdminNotificationList, getAdminPayments, getAdminSeller, getAdminSellers, getSeller, getSellerNotificationList, getSellerSettings, getSellerStorefront, getUser, getUserAddresses, loginAdmin, loginUser, logoutAdmin, logoutSeller, logoutUser, refreshToken, registerSeller, resetUserPassword, sellerLogin, updateAdminCustomization, updateSellerSettings, updateSellerStorefront, updateSellerStorefrontProduct, updateUserAddress, userForgotPassword, userRegistration, verifySeller, verifyUser } from "../controler/auth.controler";
+import { createActivityLogEntry, deleteActivityLogEntry, getActivityLog, getActivityLogs, updateActivityLogEntry } from "../controler/activityLog.controler";
 import { verifyForgotPasswordOtp } from "../utils/auth.helper";
 import isAuthenticated from "../utils/middleware/isAuthenticated";
+import isAdminAuthenticated from "../utils/middleware/isAdminAuthenticated";
 import { isSeller } from "../utils/middleware/AuthorizeRole";
 
 const router = Router();
@@ -10,6 +12,7 @@ const router = Router();
 router.post("/register", userRegistration);
 router.post("/verify-otp", verifyUser);
 router.post("/login", loginUser);
+router.post("/logout-user", isAuthenticated, logoutUser);
 router.post("/refresh-token", refreshToken);
 router.post("/forgot-password-user", userForgotPassword);
 router.post("/reset-password-user", resetUserPassword);
@@ -25,6 +28,7 @@ router.post("/verify-seller", verifySeller);
 router.post("/create-shop", createShop);
 router.post("/create-stripe-link", createStripeConnectLink);
 router.post("/login-seller", sellerLogin);
+router.post("/logout-seller", isAuthenticated,isSeller, logoutSeller);
 router.get("/loged-in-seller", isAuthenticated,isSeller, getSeller);
 router.get("/seller-settings", isAuthenticated,isSeller, getSellerSettings);
 router.put("/seller-settings", isAuthenticated,isSeller, updateSellerSettings);
@@ -36,6 +40,7 @@ router.put("/seller-storefront/products/:productId", isAuthenticated,isSeller, u
 router.delete("/seller-shop", isAuthenticated,isSeller, deleteSellerShop);
                   // {Admin}
 router.post("/login-admin", loginAdmin);
+router.post("/logout-admin", isAdminAuthenticated, logoutAdmin);
 router.get("/admin/dashboard", getAdminDashboard);
 router.get("/admin/admins", getAdminManagement);
 router.post("/admin/admins", createAdminAccount);
@@ -48,6 +53,11 @@ router.get("/admin/customization", getAdminCustomization);
 router.patch("/admin/customization", updateAdminCustomization);
 router.get("/admin/sellers", getAdminSellers);
 router.get("/admin/sellers/:sellerId", getAdminSeller);
+router.get("/admin/loggers", isAdminAuthenticated, getActivityLogs);
+router.post("/admin/loggers", isAdminAuthenticated, createActivityLogEntry);
+router.get("/admin/loggers/:logId", isAdminAuthenticated, getActivityLog);
+router.patch("/admin/loggers/:logId", isAdminAuthenticated, updateActivityLogEntry);
+router.delete("/admin/loggers/:logId", isAdminAuthenticated, deleteActivityLogEntry);
 
 
 export default router;

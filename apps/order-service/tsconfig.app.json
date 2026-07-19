@@ -3,9 +3,14 @@
   "compilerOptions": {
     "outDir": "dist",
     "types": ["node", "express"],
-    "rootDir": "src",
+    "rootDir": "../../apps",
     "tsBuildInfoFile": "dist/tsconfig.app.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": []
+  "exclude": [],
+  "references": [
+    {
+      "path": "../E-Commerce-BG/tsconfig.app.json"
+    }
+  ]
 }

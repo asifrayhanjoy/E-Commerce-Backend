@@ -22,6 +22,7 @@ const getRequestedRole = (req: any): "user" | "seller" | "" => {
 
   if (
     requestPath.includes("/loged-in-seller") ||
+    requestPath.includes("/logout-seller") ||
     requestPath.includes("/seller-") ||
     requestPath.includes("/create-product") ||
     requestPath.includes("/create-event") ||
@@ -41,7 +42,10 @@ const getRequestedRole = (req: any): "user" | "seller" | "" => {
 
   if (
     requestPath.includes("/login-in-user") ||
-    requestPath.includes("/addresses")
+    requestPath.includes("/logout-user") ||
+    requestPath.includes("/addresses") ||
+    requestPath.includes("/follow-shop") ||
+    requestPath.includes("/unfollow-shop")
   ) {
     return "user";
   }

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getCategories, createDiscountCodes, getDiscountCodes, deleteDiscountCode, uploadProductImage, deleteProductImage, createProduct, createEvent, getShopProducts, getShopEvents, restoreProduct, deleteProduct, getStripeAccount, getAllProducts, getPublicEvents, getHomeProducts, getFilteredProducts, getFilteredShops, searchProducts, getProductDetails, getProductTracking, trackProductView, trackProductWishlist, trackProductCart, topShops } from "../controller/product.controller";
+import { getCategories, createDiscountCodes, getDiscountCodes, deleteDiscountCode, uploadProductImage, deleteProductImage, createProduct, createEvent, getShopProducts, getShopEvents, restoreProduct, deleteProduct, getStripeAccount, getAllProducts, getPublicEvents, getHomeProducts, getFilteredProducts, getFilteredShops, searchProducts, getProductDetails, getProductTracking, trackProductView, trackProductWishlist, trackProductCart, topShops, followShop, unfollowShop } from "../controller/product.controller";
 import isAuthenticated from "../../../src/utils/middleware/isAuthenticated";
 
 const router = Router();
@@ -22,6 +22,13 @@ router.get("/get-public-events", getPublicEvents);
 router.get("/get-home-products", getHomeProducts);
 router.get("/get-filtered-products", getFilteredProducts);
 router.get("/get-filtered-shops", getFilteredShops);
+router.patch("/follow-shop/:shopId", isAuthenticated, followShop);
+router.put("/follow-shop/:shopId", isAuthenticated, followShop);
+router.post("/follow-shop/:shopId", isAuthenticated, followShop);
+router.patch("/unfollow-shop/:shopId", isAuthenticated, unfollowShop);
+router.put("/unfollow-shop/:shopId", isAuthenticated, unfollowShop);
+router.post("/unfollow-shop/:shopId", isAuthenticated, unfollowShop);
+router.delete("/follow-shop/:shopId", isAuthenticated, unfollowShop);
 router.get("/search-products", searchProducts);
 router.get("/product-details", getProductDetails);
 router.get("/:productId/tracking", getProductTracking);

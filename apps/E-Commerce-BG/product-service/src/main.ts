@@ -11,6 +11,7 @@ import {
 } from "./middleware/error.middleware";
 import { getHomeProducts } from "./controller/product.controller";
 import productRouter from "./routes/product.route";
+import { activityLoggerMiddleware } from "../../src/utils/activityLogger";
 
 dotenv.config({ path: path.resolve(__dirname, "../../../..", ".env") });
 dotenv.config({ path: path.resolve(__dirname, "../..", ".env") });
@@ -38,6 +39,7 @@ app.use(morgan("dev"));
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 app.use(cookieParser());
+app.use(activityLoggerMiddleware);
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
 app.get('/api', (req, res) => {

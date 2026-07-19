@@ -12,7 +12,7 @@ model users {
   name        String
   email       String        @unique
   password    String?
-  following   String[]
+  following   String[]      @default([])
   avatar      images[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -71,12 +71,16 @@ model shops {
   bio           String?
   category      String
   avatar        images[]
+  profileImage  String?
+  coverImage    String?
   coverBanner   String?
+  galleryImages String[]      @default([])
   address       String
   opening_hours String?
   website       String?
   socialLinks   Json[]
   storefront    Json?
+  followers     String[]      @default([])
   ratings       Float         @default(0)
   reviews       shopReviews[]
   sellerId      String        @unique @db.ObjectId
@@ -126,6 +130,32 @@ model seller_settings {
   withdrawMethod          Json?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
+}
+
+model activity_logs {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String?
+  userName      String?
+  userRole      String
+  action        String
+  module        String
+  description   String
+  targetId      String?
+  targetName    String?
+  ipAddress     String?
+  userAgent     String?
+  requestMethod String
+  endpoint      String
+  status        String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userRole])
+  @@index([module])
+  @@index([action])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model site_config {

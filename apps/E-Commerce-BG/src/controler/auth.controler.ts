@@ -1586,13 +1586,20 @@ const serializeStorefrontProduct = (product: any) => {
 
 const serializeSellerStorefront = (shop: any, products: any[] = []) => {
   const storefront = getStorefrontConfig(shop);
-  const coverImage = shop.coverBanner || DEFAULT_STOREFRONT_IMAGES[0];
-  const galleryImages = Array.isArray(storefront.galleryImages)
-    ? storefront.galleryImages
-        .filter((image: unknown): image is string => typeof image === "string")
-        .filter(Boolean)
-        .slice(0, 3)
+  const coverImage =
+    shop.coverImage || shop.coverBanner || storefront.coverImage || DEFAULT_STOREFRONT_IMAGES[0];
+  const shopGalleryImages = Array.isArray(shop.galleryImages)
+    ? shop.galleryImages
     : [];
+  const storefrontGalleryImages = Array.isArray(storefront.galleryImages)
+    ? storefront.galleryImages
+    : [];
+  const galleryImages = (shopGalleryImages.length > 0
+    ? shopGalleryImages
+    : storefrontGalleryImages)
+    .filter((image: unknown): image is string => typeof image === "string")
+    .filter(Boolean)
+    .slice(0, 3);
   const coverTags = Array.isArray(storefront.tags)
     ? storefront.tags
         .filter((tag: unknown): tag is string => typeof tag === "string")
@@ -1628,9 +1635,9 @@ const serializeSellerStorefront = (shop: any, products: any[] = []) => {
       id: shop.id,
       name: shop.name,
       tagline: shop.bio || "",
-      avatar: getLatestImageUrl(shop.avatar, DEFAULT_AVATAR_URL),
+      avatar: shop.profileImage || getLatestImageUrl(shop.avatar, DEFAULT_AVATAR_URL),
       rating: Number(shop.ratings || 0) > 0 ? Number(shop.ratings).toFixed(1) : "N/A",
-      followers: 0,
+      followers: Array.isArray(shop.followers) ? shop.followers.length : 0,
       hours: shop.opening_hours || "",
       address: shop.address || "",
       joinedAt: formatStorefrontDate(shop.createdAt),
@@ -2152,12 +2159,29 @@ res.status(201).json({
 export const createShop = async ( req: Request, res: Response, next: NextFunction ) => {
 
   try {
-    const { name, bio, address, opening_hours, website, category, sellerId, } = req.body;
+    const {
+      name,
+      bio,
+      address,
+      opening_hours,
+      website,
+      category,
+      sellerId,
+      profileImage,
+      profileImageFile,
+      avatarImage,
+      avatarImageFile,
+      coverImage,
+      coverImageFile,
+      coverBanner,
+      galleryImages,
+      galleryImageFiles,
+    } = req.body;
 if ( !name || !bio || !address || !sellerId || !opening_hours || !category ) {
   return next(new ValidationError("All fields are required!"));
   }
 
-  const shopData: any = { name, bio, address, opening_hours, category, sellerId,};
+  const shopData: any = { name, bio, address, opening_hours, category, sellerId, storefront: {} };
 
   if (website && website.trim() !== "") {
   shopData.website = website;
@@ -2167,9 +2191,76 @@ if ( !name || !bio || !address || !sellerId || !opening_hours || !category ) {
   data: shopData,
   });
 
+  const updateData: any = {};
+  const storefrontUpdate: Record<string, any> = {};
+
+  const profileUpload = await resolveStorefrontImageUpload(
+    profileImageFile ?? profileImage ?? avatarImageFile ?? avatarImage,
+    "/storefront/avatars",
+    `shop-profile-${shop.id}`
+  );
+  const profileUrl = profileUpload !== undefined ? profileUpload?.url || null : undefined;
+
+  if (profileUrl !== undefined) {
+    updateData.profileImage = profileUrl;
+    storefrontUpdate.avatarImage = profileUrl;
+
+    if (profileUrl) {
+      await prisma.images.create({
+        data: {
+          file_id:
+            profileUpload && "fileId" in profileUpload
+              ? profileUpload.fileId
+              : `shop-profile-${shop.id}-${Date.now()}`,
+          url: profileUrl,
+          shopId: shop.id,
+        },
+      });
+    }
+  }
+
+  const resolvedCoverImage = await resolveStorefrontImageUrl(
+    coverImageFile ?? coverImage ?? coverBanner,
+    "/storefront/covers",
+    `shop-cover-${shop.id}`
+  );
+
+  if (resolvedCoverImage !== undefined) {
+    updateData.coverImage = resolvedCoverImage;
+    updateData.coverBanner = resolvedCoverImage;
+    storefrontUpdate.coverImage = resolvedCoverImage;
+  }
+
+  const resolvedGalleryImages = await resolveGalleryImages(
+    galleryImages ?? galleryImageFiles,
+    shop.id
+  );
+
+  if (resolvedGalleryImages !== undefined) {
+    updateData.galleryImages = resolvedGalleryImages;
+    storefrontUpdate.galleryImages = resolvedGalleryImages;
+  }
+
+  if (Object.keys(storefrontUpdate).length > 0) {
+    updateData.storefront = storefrontUpdate;
+  }
+
+  const savedShop =
+    Object.keys(updateData).length > 0
+      ? await prisma.shops.update({
+          where: {
+            id: shop.id,
+          },
+          data: updateData,
+          include: {
+            avatar: true,
+          },
+        })
+      : shop;
+
   res.status(201).json({
   success: true,
-  shop,
+  shop: savedShop,
   });} catch (error) {
     next(error);
   }
@@ -2370,6 +2461,72 @@ export const loginAdmin = async ( req: Request, res: Response, next: NextFunctio
         email: admin.email,
         name: admin.name,
       },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const logoutUser = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    clearAuthCookie(res, "access_token");
+    clearAuthCookie(res, "refresh_token");
+
+    return res.status(200).json({
+      success: true,
+      message: "Logout successful!",
+      user: (req as any).user
+        ? {
+            id: (req as any).user.id,
+            name: (req as any).user.name,
+            email: (req as any).user.email,
+            role: "user",
+          }
+        : undefined,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const logoutSeller = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    clearAuthCookie(res, "seller-access-token");
+    clearAuthCookie(res, "seller-refresh-token");
+
+    return res.status(200).json({
+      success: true,
+      message: "Logout successful!",
+      seller: (req as any).seller || (req as any).user
+        ? {
+            id: ((req as any).seller || (req as any).user).id,
+            name: ((req as any).seller || (req as any).user).name,
+            email: ((req as any).seller || (req as any).user).email,
+            role: "seller",
+          }
+        : undefined,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const logoutAdmin = async ( req: Request, res: Response, next: NextFunction ) => {
+  try {
+    clearAuthCookie(res, "admin-access-token");
+    clearAuthCookie(res, "admin-refresh-token");
+
+    return res.status(200).json({
+      success: true,
+      message: "Logout successful!",
+      admin: (req as any).admin
+        ? {
+            id: (req as any).admin.id,
+            name: (req as any).admin.name,
+            email: (req as any).admin.email,
+            role: "admin",
+          }
+        : undefined,
     });
   } catch (error) {
     return next(error);
@@ -3228,7 +3385,10 @@ export const updateSellerStorefront = async ( req: any, res: Response, next: Nex
       );
 
       if (coverImage !== undefined) {
+        updateData.coverImage = coverImage;
         updateData.coverBanner = coverImage;
+        storefrontUpdate.coverImage = coverImage;
+        shouldUpdateStorefront = true;
       }
     }
 
@@ -3239,6 +3399,7 @@ export const updateSellerStorefront = async ( req: any, res: Response, next: Nex
       );
 
       if (galleryImages !== undefined) {
+        updateData.galleryImages = galleryImages;
         storefrontUpdate.galleryImages = galleryImages;
         shouldUpdateStorefront = true;
       }
@@ -3299,6 +3460,10 @@ export const updateSellerStorefront = async ( req: any, res: Response, next: Nex
           : undefined;
 
     if (avatarUrl !== undefined) {
+      updateData.profileImage = avatarUrl;
+      storefrontUpdate.avatarImage = avatarUrl;
+      shouldUpdateStorefront = true;
+
       await prisma.images.deleteMany({
         where: {
           shopId: shop.id,

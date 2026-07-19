@@ -5,7 +5,11 @@ const prisma = new PrismaClient();
 
 const initializeConfig = async () => {
   try {
-    const existingConfig = await prisma.site_config.findFirst();
+    const existingConfig = await prisma.site_config.findFirst({
+      select: {
+        id: true,
+      },
+    });
 
     if (!existingConfig) {
       await prisma.site_config.create({

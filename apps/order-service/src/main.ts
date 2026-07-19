@@ -8,6 +8,7 @@ import {
 } from "./middleware/error.middleware";
 import router from './routes/order.route';
 import { createOrder } from './controllers/order.controller';
+import { activityLoggerMiddleware } from "../../E-Commerce-BG/src/utils/activityLogger";
 
 
 const app = express();
@@ -25,6 +26,9 @@ app.use(
   })
 );
 
+app.use(cookieParser());
+app.use(activityLoggerMiddleware);
+
 app.post("/api/create-order", express.raw({ type: "application/json" }),(req, res, next) => {
     (req as any).rawBody = req.body;
     next();
@@ -33,7 +37,6 @@ app.post("/api/create-order", express.raw({ type: "application/json" }),(req, re
 );
 
 app.use(express.json());
-app.use(cookieParser());
 
 app.get('/', (req, res) => {
   res.send({ message: 'Welcome to order-service!' });

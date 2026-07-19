@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import ImageKit from "imagekit";
+import jwt from "jsonwebtoken";
 import prisma from "../libs/prisma";
 import { Prisma } from "@prisma/client";
 
@@ -7,6 +8,8 @@ declare global {
   namespace Express {
     interface Request {
       seller?: { id: string };
+      user?: { id: string };
+      role?: "user" | "seller";
     }
   }
 }
@@ -53,6 +56,14 @@ const getProductObjectIdQuery = (productId: string) => {
   }
 
   return { _id: { $oid: productId } };
+};
+
+const getShopObjectId = (shopId: string) => {
+  if (!/^[a-f\d]{24}$/i.test(shopId)) {
+    throw new ValidationError("Invalid shop id");
+  }
+
+  return shopId;
 };
 
 const getTrackingCounts = async (productId: string) => {
@@ -391,12 +402,42 @@ const getImageUrl = (value: unknown): string => {
         record.profileImageUrl ??
         record.coverPhoto ??
         record.coverPhotoUrl ??
+        record.coverImage ??
+        record.coverImageUrl ??
         record.coverBanner ??
         record.coverBannerUrl
     );
   }
 
   return "";
+};
+
+const getImageUrlList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => getImageUrlList(item))
+      .filter(Boolean);
+  }
+
+  const url = getImageUrl(value);
+
+  return url ? [url] : [];
+};
+
+const getUniqueImageUrls = (...values: unknown[]) => {
+  const seen = new Set<string>();
+  const images: string[] = [];
+
+  values.flatMap(getImageUrlList).forEach((image) => {
+    if (seen.has(image)) {
+      return;
+    }
+
+    seen.add(image);
+    images.push(image);
+  });
+
+  return images;
 };
 
 const withPublicShopImages = (shop: any) => {
@@ -409,6 +450,8 @@ const withPublicShopImages = (shop: any) => {
       ? shop.storefront
       : {};
   const avatarUrl =
+    getImageUrl(shop.profileImage) ||
+    getImageUrl(shop.profileImageUrl) ||
     getImageUrl(shop.avatar) ||
     getImageUrl(shop.avatarUrl) ||
     getImageUrl(shop.profilePhoto) ||
@@ -416,21 +459,32 @@ const withPublicShopImages = (shop: any) => {
     getImageUrl(storefront.avatarImage) ||
     getImageUrl(shop.sellers?.avatar);
   const coverBannerUrl =
+    getImageUrl(shop.coverImage) ||
+    getImageUrl(shop.coverImageUrl) ||
     getImageUrl(shop.coverBanner) ||
     getImageUrl(shop.coverBannerUrl) ||
     getImageUrl(shop.coverPhoto) ||
     getImageUrl(shop.coverPhotoUrl) ||
     getImageUrl(storefront.coverImage) ||
     getImageUrl(storefront.cover?.images);
+  const galleryImages = getUniqueImageUrls(
+    shop.galleryImages,
+    storefront.galleryImages
+  ).slice(0, 3);
 
   return {
     ...shop,
     avatarUrl,
+    profileImage: avatarUrl || shop.profileImage,
+    profileImageUrl: avatarUrl,
     profilePhoto: avatarUrl,
     profilePhotoUrl: avatarUrl,
+    coverImage: coverBannerUrl || shop.coverImage,
+    coverImageUrl: coverBannerUrl,
     coverBannerUrl,
     coverPhoto: coverBannerUrl,
     coverPhotoUrl: coverBannerUrl,
+    galleryImages,
   };
 };
 
@@ -595,20 +649,21 @@ const getTopHomeShops = async (limit: number) => {
     ],
   });
 
-  return Promise.all(
-    shops.map(async (shop) =>
-      withPublicShopImages({
-        ...shop,
-        followersCount: await prisma.users.count({
-          where: {
-            following: {
-              has: shop.id,
-            },
-          },
-        }),
-      })
-    )
-  );
+  return shops.map((shop) => {
+    const followers = Array.isArray((shop as any).followers)
+      ? (shop as any).followers
+      : [];
+
+    return withPublicShopImages({
+      ...shop,
+      followers,
+      followersCount: followers.length,
+      _count: {
+        ...((shop as any)._count || {}),
+        followers: followers.length,
+      },
+    });
+  });
 };
 
 const getSafeHomeSection = async <T>(
@@ -621,6 +676,251 @@ const getSafeHomeSection = async <T>(
   } catch (error) {
     console.error(`Failed to load home ${section}:`, error);
     return fallback;
+  }
+};
+
+const getAuthenticatedUserId = (req: Request) => {
+  if (req.role !== "user" || !req.user?.id) {
+    throw new AuthError("Please login as a user to follow this shop.");
+  }
+
+  return req.user.id;
+};
+
+const getShopIdFromRequest = (req: Request) =>
+  getShopObjectId(
+    String(
+      req.params.shopId ||
+        req.body?.shopId ||
+        req.query.shopId ||
+        ""
+    ).trim()
+  );
+
+const getShopFollowSummary = async (shopId: string, userId: string) => {
+  const [shop, user] = await Promise.all([
+    prisma.shops.findUnique({
+      where: { id: shopId },
+      include: {
+        avatar: true,
+        sellers: true,
+        products: {
+          where: {
+            AND: publicProductFilters(),
+          },
+          include: {
+            images: true,
+          },
+        },
+      },
+    }),
+    prisma.users.findUnique({
+      where: { id: userId },
+      select: { following: true },
+    }),
+  ]);
+
+  if (!shop) {
+    throw new NotFoundError("Shop not found");
+  }
+
+  const followers = Array.isArray((shop as any).followers)
+    ? (shop as any).followers
+    : [];
+  const followersCount = followers.length;
+
+  return withPublicShopImages({
+    ...shop,
+    followers,
+    followersCount,
+    _count: {
+      ...((shop as any)._count || {}),
+      followers: followersCount,
+    },
+    isFollowing: Boolean(
+      followers.includes(userId) || user?.following?.includes(shopId)
+    ),
+  });
+};
+
+const getOptionalUserFollowing = async (req: Request) => {
+  try {
+    const accessToken =
+      (req as any).cookies?.access_token ||
+      req.headers.authorization?.split(" ")[1] ||
+      "";
+    const refreshToken =
+      (req as any).cookies?.refresh_token ||
+      (req as any).cookies?.["refresh-token"] ||
+      "";
+
+    if (!accessToken && !refreshToken) {
+      return [];
+    }
+
+    let decoded: {
+      id: string;
+      role: "user" | "seller";
+    } | null = null;
+
+    try {
+      decoded = accessToken
+        ? (jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET!) as {
+            id: string;
+            role: "user" | "seller";
+          })
+        : null;
+    } catch {
+      decoded = refreshToken
+        ? (jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET!) as {
+            id: string;
+            role: "user" | "seller";
+          })
+        : null;
+    }
+
+    if (!decoded?.id || decoded.role !== "user") {
+      return [];
+    }
+
+    const user = await prisma.users.findUnique({
+      where: { id: decoded.id },
+      select: { following: true },
+    });
+
+    return user?.following || [];
+  } catch {
+    return [];
+  }
+};
+
+export const followShop = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const userId = getAuthenticatedUserId(req);
+    const shopId = getShopIdFromRequest(req);
+    const [shop, user] = await Promise.all([
+      prisma.shops.findUnique({
+        where: { id: shopId },
+        select: { id: true, followers: true },
+      }),
+      prisma.users.findUnique({
+        where: { id: userId },
+        select: { following: true },
+      }),
+    ]);
+
+    if (!shop) {
+      throw new NotFoundError("Shop not found");
+    }
+
+    if (!user) {
+      throw new AuthError("User not found.");
+    }
+
+    const following = Array.isArray(user.following) ? user.following : [];
+    const followers = Array.isArray((shop as any).followers)
+      ? (shop as any).followers
+      : [];
+
+    await prisma.$transaction([
+      prisma.users.update({
+        where: { id: userId },
+        data: {
+          following: {
+            set: following.includes(shopId)
+              ? following
+              : [...following, shopId],
+          },
+        },
+      }),
+      prisma.shops.update({
+        where: { id: shopId },
+        data: {
+          followers: {
+            set: followers.includes(userId)
+              ? followers
+              : [...followers, userId],
+          },
+        },
+      }),
+    ]);
+
+    const updatedShop = await getShopFollowSummary(shopId, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Shop followed successfully.",
+      shop: updatedShop,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const unfollowShop = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const userId = getAuthenticatedUserId(req);
+    const shopId = getShopIdFromRequest(req);
+    const [shop, user] = await Promise.all([
+      prisma.shops.findUnique({
+        where: { id: shopId },
+        select: { id: true, followers: true },
+      }),
+      prisma.users.findUnique({
+        where: { id: userId },
+        select: { following: true },
+      }),
+    ]);
+
+    if (!shop) {
+      throw new NotFoundError("Shop not found");
+    }
+
+    if (!user) {
+      throw new AuthError("User not found.");
+    }
+
+    const following = Array.isArray(user.following) ? user.following : [];
+    const followers = Array.isArray((shop as any).followers)
+      ? (shop as any).followers
+      : [];
+
+    await prisma.$transaction([
+      prisma.users.update({
+        where: { id: userId },
+        data: {
+          following: {
+            set: following.filter((id) => id !== shopId),
+          },
+        },
+      }),
+      prisma.shops.update({
+        where: { id: shopId },
+        data: {
+          followers: {
+            set: followers.filter((id: string) => id !== userId),
+          },
+        },
+      }),
+    ]);
+
+    const updatedShop = await getShopFollowSummary(shopId, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Shop unfollowed successfully.",
+      shop: updatedShop,
+    });
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -1536,10 +1836,29 @@ export const getFilteredShops = async ( req: Request, res: Response, next: NextF
         where,
       }),
     ]);
+    const currentUserFollowing = await getOptionalUserFollowing(req);
+
+    const shopsWithFollowers = shops.map((shop) => {
+      const followers = Array.isArray((shop as any).followers)
+        ? (shop as any).followers
+        : [];
+      const followersCount = followers.length;
+
+      return withPublicShopImages({
+        ...shop,
+        followers,
+        followersCount,
+        _count: {
+          ...((shop as any)._count || {}),
+          followers: followersCount,
+        },
+        isFollowing: currentUserFollowing.includes(shop.id),
+      });
+    });
 
     res.status(200).json({
       success: true,
-      shops: shops.map(withPublicShopImages),
+      shops: shopsWithFollowers,
       total,
       currentPage: page,
       totalPages: Math.ceil(total / limit),
@@ -1937,7 +2256,11 @@ export const topShops = async ( req: Request, res: Response, next: NextFunction 
         id: true,
         name: true,
         avatar: true,
+        profileImage: true,
+        coverImage: true,
         coverBanner: true,
+        galleryImages: true,
+        followers: true,
         storefront: true,
         address: true,
         ratings: true,

@@ -13,6 +13,9 @@ import { errorMiddleware } from "./packages/error-handler";
 import authRouter from "./routes/auth.route";
 import initializeConfig from "./libs/initializeConfig";
 import { createAdminNotification, getAdminCustomization, getAdminDashboard, getAdminNotificationList, getAdminPayments, getAdminSeller, getAdminSellers, updateAdminCustomization } from "./controler/auth.controler";
+import { createActivityLogEntry, deleteActivityLogEntry, getActivityLog, getActivityLogs, updateActivityLogEntry } from "./controler/activityLog.controler";
+import { activityLoggerMiddleware } from "./utils/activityLogger";
+import isAdminAuthenticated from "./utils/middleware/isAdminAuthenticated";
 
 const app = express();
 app.set('trust proxy', 1);
@@ -33,6 +36,7 @@ app.use(morgan("dev"));
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 app.use(cookieParser());
+app.use(activityLoggerMiddleware);
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
 const limiter = rateLimit({
@@ -150,6 +154,11 @@ app.get("/api/v1/admin/customization", getAdminCustomization);
 app.patch("/api/v1/admin/customization", updateAdminCustomization);
 app.get("/api/v1/admin/sellers", getAdminSellers);
 app.get("/api/v1/admin/sellers/:sellerId", getAdminSeller);
+app.get("/api/v1/admin/loggers", isAdminAuthenticated, getActivityLogs);
+app.post("/api/v1/admin/loggers", isAdminAuthenticated, createActivityLogEntry);
+app.get("/api/v1/admin/loggers/:logId", isAdminAuthenticated, getActivityLog);
+app.patch("/api/v1/admin/loggers/:logId", isAdminAuthenticated, updateActivityLogEntry);
+app.delete("/api/v1/admin/loggers/:logId", isAdminAuthenticated, deleteActivityLogEntry);
 app.use("/api/v1/auth", authRouter);
 
 app.use(errorMiddleware);
